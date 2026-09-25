@@ -32,6 +32,9 @@ export function defaultBusiness(): Business {
     currencyCode: 'USD',
     currencySymbol: '$',
     hours: 'Tue–Sat, 9:00 AM – 6:00 PM',
+    openDays: [2, 3, 4, 5, 6],
+    openTime: '09:00',
+    closeTime: '18:00',
     teamType: 'team',
     depositPct: 25,
     bufferMin: 15,
@@ -104,10 +107,9 @@ let clientSeq = 0;
 function client(over: Partial<Client> & { name: string }): Client {
   clientSeq += 1;
   return {
-    id: over.id ?? makeId('cl'),
     phone: `(415) 555-${String(1000 + clientSeq).slice(-4)}`,
     email: `${over.name.toLowerCase().replace(/[^a-z]+/g, '.')}@example.com`,
-    birthday: '01-01',
+    birthday: '',
     createdAt: isoDaysAgo(400),
     lastVisit: null,
     nextVisit: null,
@@ -122,6 +124,8 @@ function client(over: Partial<Client> & { name: string }): Client {
     cancellationCount: 0,
     status: 'active',
     ...over,
+    // Set after the spread: callers may pass `id: undefined`, which must not wipe the generated id.
+    id: over.id ?? makeId('cl'),
   };
 }
 

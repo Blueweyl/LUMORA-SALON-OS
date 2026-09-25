@@ -23,16 +23,18 @@ export function QuickAddMenu() {
       <button
         onClick={toggle}
         aria-label="Quick add"
-        className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-plum-600 text-white shadow-sm hover:bg-plum-700"
+        aria-expanded={show}
+        aria-haspopup="menu"
+        className="flex h-10 w-10 flex-none items-center justify-center rounded-[10px] bg-plum-600 text-white shadow-sm hover:bg-plum-700"
       >
         <Icon name="plus" size={19} />
       </button>
       {show && (
         <>
           <div className="fixed inset-0 z-[75]" onClick={close} />
-          <div className="absolute right-0 top-[46px] z-[80] w-56 animate-lum-pop rounded-xl border border-ivory-400 bg-white p-1.5 shadow-[var(--shadow-pop)]">
+          <div role="menu" onKeyDown={(e) => e.key === 'Escape' && close()} className="absolute right-0 top-[48px] z-[80] w-56 animate-lum-pop rounded-xl border border-ivory-400 bg-white p-1.5 shadow-[var(--shadow-pop)]">
             {items.map((it) => (
-              <button key={it.label} onClick={it.onClick} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13.5px] font-semibold text-ink-900 hover:bg-plum-50">
+              <button key={it.label} role="menuitem" onClick={it.onClick} className="flex min-h-[44px] w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13.5px] font-semibold text-ink-900 hover:bg-plum-50">
                 <Icon name={it.icon} size={16} className="text-plum-600" />
                 {it.label}
               </button>

@@ -29,9 +29,9 @@ export function Grow() {
   return (
     <div className="mx-auto max-w-[1150px] animate-lum-fade">
       <h1 className="mb-4 font-serif text-[28px] font-medium text-ink-900">Grow</h1>
-      <div className="mb-5 flex flex-wrap gap-1 border-b border-ivory-400">
+      <div role="tablist" className="mb-5 flex gap-1 overflow-x-auto border-b border-ivory-400 scrollbar-none">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)} className={`mr-5 border-b-2 pb-2.5 text-[13.5px] font-bold whitespace-nowrap ${tab === t.key ? 'border-plum-600 text-plum-600' : 'border-transparent text-ink-400'}`}>
+          <button key={t.key} role="tab" aria-selected={tab === t.key} onClick={() => setTab(t.key)} className={`mr-5 min-h-[40px] flex-none border-b-2 pb-2.5 text-[13.5px] font-bold whitespace-nowrap ${tab === t.key ? 'border-plum-600 text-plum-600' : 'border-transparent text-ink-400'}`}>
             {t.label}
           </button>
         ))}
@@ -47,15 +47,15 @@ export function Grow() {
 
 function OpportunityCard({ icon, title, subtitle, cta, onClick }: { icon: string; title: string; subtitle: string; cta: string; onClick: () => void }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-ivory-400 bg-white p-5">
-      <div className="flex items-start gap-3.5">
+    <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-ivory-400 bg-white p-5">
+      <div className="flex min-w-0 flex-1 items-start gap-3.5">
         <span className="text-[22px] leading-none">{icon}</span>
         <div>
           <div className="text-[14.5px] font-bold text-ink-900">{title}</div>
           <div className="text-[12.5px] text-ink-500">{subtitle}</div>
         </div>
       </div>
-      <button onClick={onClick} className="flex-none rounded-[9px] bg-plum-600 px-3.5 py-2 text-[12.5px] font-bold text-white hover:bg-plum-700 whitespace-nowrap">{cta}</button>
+      <button onClick={onClick} className="min-h-[44px] flex-none rounded-[9px] bg-plum-600 px-3.5 py-2 text-[12.5px] font-bold text-white hover:bg-plum-700 whitespace-nowrap">{cta}</button>
     </div>
   );
 }
@@ -109,6 +109,9 @@ function OpportunitiesTab() {
           onClick={() => setTab('Reviews')}
         />
       )}
+      {birthdays.length + overdueCount + reviewCandidates.length + referralCandidates.length + inactive === 0 && (
+        <div className="rounded-2xl border border-dashed border-ivory-400 py-12 text-center text-[13px] text-ink-400">No opportunities yet — they appear as you complete visits and build your client list.</div>
+      )}
       {inactive > 0 && (
         <OpportunityCard
           icon="💤"
@@ -126,14 +129,15 @@ function RetentionGroup({ title, color, entries, template }: { title: string; co
   const state = useStore((s) => s);
   const showCopyMessage = useStore((s) => s.showCopyMessage);
   const openClient = useStore((s) => s.openClient);
-  const [open, setOpen] = useState(false);
+  const rebookClient = useStore((s) => s.rebookClient);
+  const [open, setOpen] = useState(title === 'Overdue' || title === 'Due Now');
 
   if (entries.length === 0) return null;
 
   return (
     <div className="rounded-2xl border border-ivory-400 bg-white p-5">
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between text-left">
-        <div className="flex items-center gap-2.5">
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex min-h-[40px] w-full items-center justify-between gap-2 text-left">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
           <span className="h-2.5 w-2.5 rounded-full" style={{ background: color }} />
           <span className="text-[15px] font-bold text-ink-900">{title}</span>
           <span className="text-[13px] text-ink-400">{entries.length} client{entries.length === 1 ? '' : 's'} · ~{state.business.currencySymbol}{potentialRevenue(state, entries)} potential</span>
@@ -143,16 +147,19 @@ function RetentionGroup({ title, color, entries, template }: { title: string; co
       {open && (
         <div className="mt-3.5 flex flex-col gap-1.5 border-t border-ivory-200 pt-3.5">
           {entries.map((e) => (
-            <div key={e.client.id} className="flex items-center justify-between rounded-lg px-1 py-1.5">
-              <button onClick={() => openClient(e.client.id)} className="text-left text-[13.5px] font-semibold text-ink-900 hover:text-plum-600">
-                {e.client.name} <span className="font-normal text-ink-400">· {e.daysSince}d since last visit</span>
+            <div key={e.client.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg px-1 py-1.5">
+              <button onClick={() => openClient(e.client.id)} className="min-w-0 text-left text-[13.5px] font-semibold text-ink-900 hover:text-plum-600">
+                {e.client.name} <span className="font-normal text-ink-400">· {e.daysSince}d since last visit{e.client.phone ? ` · ${e.client.phone}` : ''}</span>
               </button>
-              <button
-                onClick={() => showCopyMessage('Rebooking Message', template(e.client.name.split(' ')[0]))}
-                className="rounded-md border border-ivory-400 px-2.5 py-1.5 text-[11.5px] font-semibold text-ink-600 hover:border-plum-600 hover:text-plum-600"
-              >
-                Copy Message
-              </button>
+              <div className="flex flex-none gap-1.5">
+                <button
+                  onClick={() => showCopyMessage('Rebooking Message', template(e.client.name.split(' ')[0]))}
+                  className="min-h-[36px] rounded-md border border-ivory-400 px-2.5 py-1.5 text-[11.5px] font-semibold text-ink-600 hover:border-plum-600 hover:text-plum-600"
+                >
+                  Copy Reminder
+                </button>
+                <button onClick={() => rebookClient(e.client.id)} className="min-h-[36px] rounded-md bg-plum-600 px-3 py-1.5 text-[11.5px] font-bold text-white">Book</button>
+              </div>
             </div>
           ))}
         </div>
@@ -182,12 +189,13 @@ function RetentionTab() {
 function LoyaltyTab() {
   const state = useStore((s) => s);
   const redeem = useStore((s) => s.redeemReward);
-  const sorted = [...state.clients].filter((c) => c.loyaltyPoints > 0).sort((a, b) => b.loyaltyPoints - a.loyaltyPoints);
+  const sorted = [...state.clients].filter((c) => !c.archived && c.loyaltyPoints > 0).sort((a, b) => b.loyaltyPoints - a.loyaltyPoints);
 
   return (
     <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1.5fr_1fr]">
       <div className="overflow-hidden rounded-2xl border border-ivory-400 bg-white">
         <div className="border-b border-ivory-400 px-5 py-3.5 text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Client Points</div>
+        {sorted.length === 0 && <p className="px-5 py-8 text-center text-[13px] text-ink-400">Clients earn 1 point per {state.business.currencySymbol}1 spent at checkout.</p>}
         {sorted.map((c) => {
           const tierColors = TIER_COLORS[c.vipTier];
           const nextReward = [...state.loyaltyRewards].sort((a, b) => a.pointsCost - b.pointsCost).find((r) => r.pointsCost > c.loyaltyPoints);
@@ -208,7 +216,7 @@ function LoyaltyTab() {
         <div className="mb-3.5 text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Rewards Catalog</div>
         <div className="flex flex-col gap-2">
           {state.loyaltyRewards.map((r) => (
-            <div key={r.id} className="flex items-center justify-between rounded-xl border border-ivory-400 px-3.5 py-2.5">
+            <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-ivory-400 px-3.5 py-2.5">
               <div>
                 <div className="text-[13px] font-bold text-ink-900">{r.label}</div>
                 <div className="text-[11.5px] text-ink-400">{r.pointsCost} pts</div>
@@ -224,19 +232,19 @@ function LoyaltyTab() {
 
 function RedeemPicker({ rewardId, onRedeem }: { rewardId: string; onRedeem: (clientId: string, rewardId: string) => void }) {
   const allClients = useStore((s) => s.clients);
-  const clients = allClients.filter((c) => c.loyaltyPoints > 0);
+  const clients = allClients.filter((c) => !c.archived && c.loyaltyPoints > 0).sort((a, b) => a.name.localeCompare(b.name));
   const [clientId, setClientId] = useState('');
   return (
     <div className="flex gap-1.5">
-      <select value={clientId} onChange={(e) => setClientId(e.target.value)} className="rounded-md border border-ivory-300 bg-white px-2 py-1.5 text-[11.5px]">
+      <select aria-label="Client to redeem for" value={clientId} onChange={(e) => setClientId(e.target.value)} className="min-h-[36px] max-w-[140px] rounded-md border border-ivory-300 bg-white px-2 py-1.5 text-[12px]">
         <option value="">Client…</option>
         {clients.map((c) => (
           <option key={c.id} value={c.id}>{c.name}</option>
         ))}
       </select>
       <button
-        onClick={() => clientId && onRedeem(clientId, rewardId)}
-        className="rounded-md bg-plum-100 px-2.5 py-1.5 text-[11px] font-bold text-plum-600 hover:bg-plum-600 hover:text-white"
+        onClick={() => (clientId ? onRedeem(clientId, rewardId) : useStore.getState().toast('Choose a client first'))}
+        className="min-h-[36px] rounded-md bg-plum-100 px-2.5 py-1.5 text-[11px] font-bold text-plum-600 hover:bg-plum-600 hover:text-white"
       >
         Redeem
       </button>

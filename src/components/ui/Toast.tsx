@@ -2,14 +2,14 @@ import { useStore } from '../../store/store';
 
 export function Toast() {
   const msg = useStore((s) => s.toastMsg);
-  if (!msg) return null;
+  const id = useStore((s) => s.toastId);
   return (
-    <div
-      key={msg}
-      className="fixed bottom-24 left-1/2 z-[300] animate-lum-toast rounded-full bg-ink-900 px-5 py-3 text-sm font-semibold text-white shadow-[var(--shadow-pop)] md:bottom-8"
-      style={{ transform: 'translateX(-50%)' }}
-    >
-      {msg}
+    <div role="status" aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-24 z-[300] flex justify-center px-4 md:bottom-8">
+      {msg && (
+        <div key={id} className="max-w-[560px] animate-lum-fade rounded-2xl bg-ink-900 px-5 py-3 text-center text-sm font-semibold text-white shadow-[var(--shadow-pop)]">
+          {msg}
+        </div>
+      )}
     </div>
   );
 }

@@ -118,3 +118,15 @@ export function formatBirthday(mmdd: string): string {
 }
 
 export { MONTHS, WEEKDAYS, WEEKDAYS_LONG };
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago" — for save/backup timestamps. */
+export function formatRelativeTime(ms: number): string {
+  const diff = Math.max(0, Date.now() - ms);
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}

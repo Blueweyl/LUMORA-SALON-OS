@@ -8,6 +8,7 @@ export interface StaffMember {
   role: string;
   color: string; // hex accent used for calendar chips
   initials: string;
+  archived?: boolean; // hidden from new bookings, kept for history
 }
 
 export interface Service {
@@ -71,6 +72,7 @@ export interface Client {
   cancellationCount: number;
   status: 'active' | 'lead' | 'inactive';
   referredBy?: string;
+  archived?: boolean; // hidden from lists/booking, kept for history
 }
 
 export type AppointmentStatus =
@@ -86,6 +88,7 @@ export interface ProductSoldLine {
   itemId: ID;
   qty: number;
   price: number;
+  name?: string; // snapshot so history survives item edits/removal
 }
 
 export interface Appointment {
@@ -132,6 +135,9 @@ export interface Payment {
   type: 'deposit' | 'balance' | 'full' | 'product' | 'package' | 'gift-card';
   date: string;
   note?: string;
+  tip?: number; // portion of amount that is a tip (not applied to the bill)
+  voided?: boolean; // voided payments are kept for audit but excluded from totals
+  voidedAt?: string;
 }
 
 export interface Expense {
@@ -181,7 +187,10 @@ export interface Business {
   name: string;
   currencyCode: string;
   currencySymbol: string;
-  hours: string;
+  hours: string; // human-readable label, derived from openDays/openTime/closeTime
+  openDays: number[]; // 0 = Sunday … 6 = Saturday
+  openTime: string; // HH:MM
+  closeTime: string; // HH:MM
   teamType: 'solo' | 'team';
   depositPct: number;
   bufferMin: number;

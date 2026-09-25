@@ -16,13 +16,14 @@ export function Sidebar() {
   const openSettings = useStore((s) => s.openSettings);
 
   return (
-    <div className="hidden w-[204px] flex-none flex-col gap-1 border-r border-ivory-400 bg-ivory-50 px-3 py-5 md:flex">
+    <nav aria-label="Main" className="sticky top-[61px] hidden h-[calc(100svh-61px)] w-[204px] flex-none flex-col gap-1 self-start overflow-y-auto border-r border-ivory-400 bg-ivory-50 px-3 py-5 md:flex">
       {NAV.map((n) => {
         const active = section === n.key;
         return (
           <button
             key={n.key}
             onClick={() => setSection(n.key)}
+            aria-current={active ? 'page' : undefined}
             className={`flex items-center gap-3 rounded-[10px] px-3.5 py-2.5 text-left text-[14px] font-semibold transition-colors ${
               active ? 'bg-plum-100 text-plum-600' : 'text-ink-500 hover:bg-plum-50 hover:text-ink-900'
             }`}
@@ -40,6 +41,6 @@ export function Sidebar() {
         <Icon name="settings" size={16} />
         Settings
       </button>
-    </div>
+    </nav>
   );
 }

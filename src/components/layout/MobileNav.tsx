@@ -15,16 +15,16 @@ export function MobileNav() {
   const setSection = useStore((s) => s.setSection);
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-[100] flex border-t border-ivory-400 bg-white/95 backdrop-blur md:hidden" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+    <nav aria-label="Sections" className="fixed inset-x-0 bottom-0 z-[100] flex border-t border-ivory-400 bg-white/95 backdrop-blur md:hidden" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
       {NAV.map((n) => {
         const active = section === n.key;
         return (
-          <button key={n.key} onClick={() => setSection(n.key)} className="flex flex-1 flex-col items-center gap-0.5 py-2.5 text-[10.5px] font-semibold" style={{ color: active ? 'var(--color-plum-600)' : 'var(--color-ink-400)' }}>
+          <button key={n.key} onClick={() => setSection(n.key)} aria-current={active ? 'page' : undefined} className="flex min-h-[52px] flex-1 flex-col items-center gap-0.5 py-2.5 text-[10.5px] font-semibold" style={{ color: active ? 'var(--color-plum-600)' : 'var(--color-ink-400)' }}>
             <Icon name={n.icon} size={19} />
             {n.label}
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }

@@ -10,8 +10,12 @@ export function defaultOnboardingBiz(): OnboardingBiz {
     serviceDraft: [],
     staffNames: [''],
     hours: 'Tue–Sat, 9:00 AM – 6:00 PM',
+    openDays: [2, 3, 4, 5, 6],
+    openTime: '09:00',
+    closeTime: '18:00',
     depositPct: 25,
     bufferMin: 15,
+    startFresh: true,
   };
 }
 
@@ -30,6 +34,8 @@ export function defaultNewApptDraft(): NewApptDraft {
     deposit: 0,
     notes: '',
     recurring: 'none',
+    depositMethod: 'Card',
+    allowOutsideHours: false,
   };
 }
 
@@ -38,5 +44,5 @@ export function defaultCheckoutDraft(): CheckoutDraft {
 }
 
 export function defaultRecordPaymentDraft() {
-  return { clientId: '', amount: 0, method: 'Card' as const, type: 'full' as const, note: '' };
+  return { clientId: '', apptId: '', amount: 0, method: 'Card' as const, type: 'full' as const, note: '' };
 }

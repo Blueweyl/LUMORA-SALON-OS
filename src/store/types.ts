@@ -1,3 +1,4 @@
+import type { BackupSummary } from '../lib/backup';
 import type {
   Appointment,
   Business,
@@ -40,8 +41,12 @@ export interface OnboardingBiz {
   serviceDraft: ServiceDraftRow[];
   staffNames: string[];
   hours: string;
+  openDays: number[];
+  openTime: string;
+  closeTime: string;
   depositPct: number;
   bufferMin: number;
+  startFresh: boolean; // clear demo clients/bookings when setup finishes
 }
 
 export interface NewClientDraft {
@@ -64,6 +69,8 @@ export interface NewApptDraft {
   deposit: number;
   notes: string;
   recurring: 'none' | 'weekly' | 'biweekly' | 'monthly';
+  depositMethod: 'Card' | 'Cash';
+  allowOutsideHours: boolean;
 }
 
 export interface CheckoutDraft {
@@ -101,6 +108,13 @@ export interface Domain {
   loyaltyRewards: LoyaltyReward[];
   demoMode: boolean;
   onboardingComplete: boolean;
+  lastBackupAt: string | null;
+}
+
+export interface PendingImport {
+  fileName: string;
+  domain: Domain;
+  summary: BackupSummary;
 }
 
 export interface UIState {
@@ -131,6 +145,7 @@ export interface UIState {
   justAddedClientId: string | null;
 
   showNewAppt: boolean;
+  editingApptId: string | null; // set when the appointment modal is rescheduling an existing booking
   newApptDraft: NewApptDraft;
   newApptPrefillClientId: string | null;
 
@@ -143,11 +158,15 @@ export interface UIState {
   pricingServiceId: string;
 
   showRecordPayment: boolean;
-  recordPaymentDraft: { clientId: string; amount: number; method: 'Card' | 'Cash'; type: 'full' | 'deposit' | 'balance' | 'product' | 'package' | 'gift-card'; note: string };
+  recordPaymentDraft: { clientId: string; apptId: string; amount: number; method: 'Card' | 'Cash'; type: 'full' | 'deposit' | 'balance' | 'product' | 'package' | 'gift-card'; note: string };
+
+  showArchivedClients: boolean;
+  pendingImport: PendingImport | null;
 
   copyMessage: CopyMessageState | null;
   confirmDialog: ConfirmDialogState | null;
   toastMsg: string;
+  toastId: number; // bumps on every toast so a repeated message re-announces
 
   rebookTargetClientId: string | null;
 }

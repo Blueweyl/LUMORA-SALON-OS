@@ -2,8 +2,8 @@ import { useState } from 'react';
 import { useStore } from '../store/store';
 import { Icon } from '../components/icons';
 import { ClientAvatar, BackButton } from './Clients';
-import { formatDateLong, formatDateShort, formatRelative, formatBirthday } from '../lib/dates';
-import { getOutstandingForClient, serviceNames, apptTotal } from '../lib/selectors';
+import { formatDateLong, formatDateShort, formatRelative, formatBirthday, formatTime } from '../lib/dates';
+import { getNextApptForClient, getOutstandingAppointments, getOutstandingForClient, serviceNames, apptTotal, staffName } from '../lib/selectors';
 import { TIER_COLORS, TIER_LABEL } from '../lib/loyalty';
 import { statusMeta } from '../lib/status';
 import type { ClientTab } from '../store/types';
@@ -20,16 +20,27 @@ export function ClientProfile() {
   const openNewAppt = useStore((s) => s.openNewAppt);
   const openRecordPayment = useStore((s) => s.openRecordPayment);
   const deleteClient = useStore((s) => s.deleteClient);
+  const archiveClient = useStore((s) => s.archiveClient);
+  const restoreClient = useStore((s) => s.restoreClient);
+  const [editing, setEditing] = useState(false);
 
   const client = state.clients.find((c) => c.id === clientId);
   if (!client) return null;
 
   const owed = getOutstandingForClient(state, clientId);
   const tierColors = TIER_COLORS[client.vipTier];
+  const hasHistory = state.appointments.some((a) => a.clientId === clientId) || state.payments.some((p) => p.clientId === clientId);
 
   return (
     <div className="mx-auto max-w-[900px] animate-lum-fade">
       <BackButton onClick={close} label="All Clients" />
+
+      {client.archived && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-xl border border-ivory-400 bg-ivory-200 px-4 py-3 text-[13px] text-ink-700">
+          <span className="min-w-0 flex-1"><b>Archived.</b> Hidden from your client list and booking; history and payments are kept.</span>
+          <button onClick={() => restoreClient(client.id)} className="min-h-[40px] rounded-lg bg-plum-600 px-3.5 text-[12.5px] font-bold text-white">Restore Client</button>
+        </div>
+      )}
 
       <div className="mb-5 flex flex-col gap-4 rounded-2xl border border-ivory-400 bg-white p-6 sm:flex-row sm:items-center">
         <ClientAvatar name={client.name} size={56} />
@@ -40,21 +51,27 @@ export function ClientProfile() {
               <span className="rounded-full px-2.5 py-[3px] text-[11px] font-bold" style={{ background: tierColors.bg, color: tierColors.text }}>{TIER_LABEL[client.vipTier]}</span>
             )}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[13px] text-ink-500">
-            <span className="flex items-center gap-1.5"><Icon name="phone" size={12} />{client.phone || 'No phone on file'}</span>
-            <span className="flex items-center gap-1.5"><Icon name="mail" size={12} />{client.email || 'No email on file'}</span>
-            {client.birthday && client.birthday !== '01-01' && <span className="flex items-center gap-1.5"><Icon name="gift" size={12} />{formatBirthday(client.birthday)}</span>}
-          </div>
+          {editing ? (
+            <ContactEditor clientId={client.id} onDone={() => setEditing(false)} />
+          ) : (
+            <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-ink-500">
+              {client.phone ? <a href={`tel:${client.phone.replace(/[^\d+]/g, '')}`} className="flex items-center gap-1.5 hover:text-plum-600"><Icon name="phone" size={12} />{client.phone}</a> : <span className="flex items-center gap-1.5"><Icon name="phone" size={12} />No phone on file</span>}
+              {client.email ? <a href={`mailto:${client.email}`} className="flex min-w-0 items-center gap-1.5 break-all hover:text-plum-600"><Icon name="mail" size={12} />{client.email}</a> : <span className="flex items-center gap-1.5"><Icon name="mail" size={12} />No email on file</span>}
+              {client.birthday && <span className="flex items-center gap-1.5"><Icon name="gift" size={12} />{formatBirthday(client.birthday)}</span>}
+              <button onClick={() => setEditing(true)} className="flex min-h-[32px] items-center gap-1 font-semibold text-plum-600"><Icon name="edit" size={12} /> Edit</button>
+            </div>
+          )}
         </div>
-        <div className="flex flex-none gap-2">
-          <button onClick={() => openRecordPayment(client.id)} className="rounded-[9px] border border-ivory-400 px-3.5 py-2.5 text-[13px] font-bold text-ink-700 hover:border-plum-600 hover:text-plum-600">Record Payment</button>
-          <button onClick={() => openNewAppt({ clientId: client.id })} className="rounded-[9px] bg-plum-600 px-3.5 py-2.5 text-[13px] font-bold text-white hover:bg-plum-700">Book Appointment</button>
+        <div className="flex flex-none flex-wrap gap-2">
+          <button onClick={() => openRecordPayment(client.id)} className="min-h-[44px] rounded-[9px] border border-ivory-400 px-3.5 py-2.5 text-[13px] font-bold text-ink-700 hover:border-plum-600 hover:text-plum-600">Record Payment</button>
+          <button onClick={() => (client.archived ? restoreClient(client.id) : openNewAppt({ clientId: client.id }))} className="min-h-[44px] rounded-[9px] bg-plum-600 px-3.5 py-2.5 text-[13px] font-bold text-white hover:bg-plum-700">{client.archived ? 'Restore to Book' : 'Book Appointment'}</button>
         </div>
       </div>
 
       {owed > 0 && (
-        <div className="mb-5 flex items-center gap-2.5 rounded-xl border border-bad-100 bg-bad-100/50 px-4 py-3 text-[13px] font-semibold text-bad-600">
-          <Icon name="alert" size={15} /> {client.name.split(' ')[0]} owes {state.business.currencySymbol}{owed.toFixed(0)}
+        <div className="mb-5 flex flex-wrap items-center gap-2.5 rounded-xl border border-bad-100 bg-bad-100/50 px-4 py-3 text-[13px] font-semibold text-bad-600">
+          <Icon name="alert" size={15} /> <span className="flex-1">{client.name.split(' ')[0]} owes {state.business.currencySymbol}{owed.toFixed(2)}</span>
+          <button onClick={() => openRecordPayment(client.id, getOutstandingAppointments(state, client.id)[0]?.id)} className="min-h-[36px] rounded-lg bg-bad-500 px-3 text-[12px] font-bold text-white">Record Payment</button>
         </div>
       )}
 
@@ -81,10 +98,17 @@ export function ClientProfile() {
       {tab === 'Notes' && <NotesTab clientId={clientId} />}
       {tab === 'Payments' && <PaymentsTab clientId={clientId} />}
 
-      <div className="mt-8 flex justify-end">
-        <button onClick={() => deleteClient(clientId)} className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-300 hover:text-bad-500">
-          <Icon name="trash" size={12} /> Delete client
-        </button>
+      <div className="mt-8 flex justify-end gap-4">
+        {!client.archived && (
+          <button onClick={() => archiveClient(clientId)} className="flex min-h-[40px] items-center gap-1.5 text-[12.5px] font-semibold text-ink-400 hover:text-bad-500">
+            <Icon name="box" size={12} /> Archive client
+          </button>
+        )}
+        {!hasHistory && (
+          <button onClick={() => deleteClient(clientId)} className="flex min-h-[40px] items-center gap-1.5 text-[12.5px] font-semibold text-ink-300 hover:text-bad-500">
+            <Icon name="trash" size={12} /> Delete permanently
+          </button>
+        )}
       </div>
     </div>
   );
@@ -102,7 +126,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 function OverviewTab({ clientId }: { clientId: string }) {
   const state = useStore((s) => s);
   const client = state.clients.find((c) => c.id === clientId)!;
-  const upcoming = state.appointments.filter((a) => a.clientId === clientId && (a.status === 'confirmed' || a.status === 'unconfirmed')).sort((a, b) => a.date.localeCompare(b.date))[0];
+  const upcoming = getNextApptForClient(state, clientId);
+  const openApptDetail = useStore((s) => s.openApptDetail);
+  const rebookClient = useStore((s) => s.rebookClient);
   const bp = client.beautyProfile;
 
   return (
@@ -110,12 +136,15 @@ function OverviewTab({ clientId }: { clientId: string }) {
       <div className="rounded-2xl border border-ivory-400 bg-white p-5">
         <div className="mb-3 text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Next Appointment</div>
         {upcoming ? (
-          <div>
-            <div className="text-[14.5px] font-bold text-ink-900">{formatDateLong(upcoming.date)}</div>
-            <div className="text-[13px] text-ink-500">{serviceNames(state, upcoming.serviceIds)} · {state.business.currencySymbol}{apptTotal(upcoming).toFixed(0)}</div>
-          </div>
+          <button onClick={() => openApptDetail(upcoming.id)} className="block w-full text-left">
+            <div className="text-[14.5px] font-bold text-ink-900">{formatDateLong(upcoming.date)}, {formatTime(upcoming.time)}</div>
+            <div className="text-[13px] text-ink-500">{serviceNames(state, upcoming.serviceIds)} · {staffName(state, upcoming.staffId)} · {state.business.currencySymbol}{apptTotal(upcoming).toFixed(0)}</div>
+          </button>
         ) : (
-          <p className="text-[13px] text-ink-400">No upcoming appointment booked.</p>
+          <div>
+            <p className="mb-3 text-[13px] text-ink-400">No upcoming appointment booked.{client.lastVisit ? ` Last visit ${formatRelative(client.lastVisit).toLowerCase()}.` : ''}</p>
+            {!client.archived && <button onClick={() => rebookClient(clientId)} className="min-h-[40px] rounded-lg bg-plum-600 px-3.5 text-[12.5px] font-bold text-white">Rebook {client.name.split(' ')[0]}</button>}
+          </div>
         )}
       </div>
       <div className="rounded-2xl border border-ivory-400 bg-white p-5">
@@ -124,14 +153,14 @@ function OverviewTab({ clientId }: { clientId: string }) {
           {bp.hairType && <div><b className="text-ink-500">Hair:</b> {bp.hairType}</div>}
           {bp.nailType && <div><b className="text-ink-500">Nails:</b> {bp.nailType}</div>}
           {bp.allergies && <div><b className="text-ink-500">Allergies:</b> {bp.allergies}</div>}
-          {bp.preferredStaffId && <div><b className="text-ink-500">Prefers:</b> {state.staff.find((s) => s.id === bp.preferredStaffId)?.name}</div>}
+          {bp.preferredStaffId && <div><b className="text-ink-500">Prefers:</b> {staffName(state, bp.preferredStaffId)}</div>}
           {!bp.hairType && !bp.nailType && !bp.allergies && <p className="text-ink-400">No beauty profile details yet.</p>}
         </div>
       </div>
-      {client.noShowCount > 0 && (
+      {(client.noShowCount > 0 || client.cancellationCount > 0) && (
         <div className="rounded-2xl border border-ivory-400 bg-white p-5 md:col-span-2">
           <div className="mb-1 text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Attendance</div>
-          <p className="text-[13px] text-ink-500">{client.noShowCount} no-show{client.noShowCount === 1 ? '' : 's'} on record.</p>
+          <p className="text-[13px] text-ink-500">{client.noShowCount} no-show{client.noShowCount === 1 ? '' : 's'} · {client.cancellationCount} cancellation{client.cancellationCount === 1 ? '' : 's'} on record.</p>
         </div>
       )}
     </div>
@@ -141,7 +170,7 @@ function OverviewTab({ clientId }: { clientId: string }) {
 function HistoryTab({ clientId }: { clientId: string }) {
   const state = useStore((s) => s);
   const openApptDetail = useStore((s) => s.openApptDetail);
-  const history = state.appointments.filter((a) => a.clientId === clientId).sort((a, b) => b.date.localeCompare(a.date));
+  const history = state.appointments.filter((a) => a.clientId === clientId).sort((a, b) => (b.date + b.time).localeCompare(a.date + a.time));
 
   if (history.length === 0) return <EmptyState text="No appointment history yet." />;
 
@@ -150,13 +179,13 @@ function HistoryTab({ clientId }: { clientId: string }) {
       {history.map((a) => {
         const meta = statusMeta(a.status);
         return (
-          <button key={a.id} onClick={() => openApptDetail(a.id)} className="flex items-center justify-between rounded-xl border border-ivory-400 bg-white px-4 py-3 text-left hover:border-plum-600">
-            <div>
-              <div className="text-[13.5px] font-bold text-ink-900">{serviceNames(state, a.serviceIds)}</div>
-              <div className="text-[12px] text-ink-400">{formatDateShort(a.date)} · {state.staff.find((s) => s.id === a.staffId)?.name}</div>
+          <button key={a.id} onClick={() => openApptDetail(a.id)} className="flex items-center justify-between gap-3 rounded-xl border border-ivory-400 bg-white px-4 py-3 text-left hover:border-plum-600">
+            <div className="min-w-0">
+              <div className="truncate text-[13.5px] font-bold text-ink-900">{serviceNames(state, a.serviceIds)}</div>
+              <div className="text-[12px] text-ink-400">{formatDateShort(a.date)} · {formatTime(a.time)} · {staffName(state, a.staffId)}</div>
             </div>
-            <div className="flex items-center gap-3">
-              <span className="text-[13.5px] font-bold text-ink-900">{state.business.currencySymbol}{apptTotal(a).toFixed(0)}</span>
+            <div className="flex flex-none items-center gap-3">
+              <span className="hidden text-[13.5px] font-bold text-ink-900 sm:inline">{state.business.currencySymbol}{apptTotal(a).toFixed(0)}</span>
               <span className="rounded-full px-2.5 py-[3px] text-[11px] font-bold" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
             </div>
           </button>
@@ -200,7 +229,7 @@ function BeautyProfileTab({ clientId }: { clientId: string }) {
           Preferred staff
           <select value={client.beautyProfile.preferredStaffId} onChange={(e) => update(clientId, 'preferredStaffId', e.target.value)} className="rounded-[10px] border border-ivory-400 bg-white px-3.5 py-2.5 text-[13.5px] font-normal">
             <option value="">No preference</option>
-            {state.staff.map((s) => (
+            {state.staff.filter((s) => !s.archived || s.id === client.beautyProfile.preferredStaffId).map((s) => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
@@ -252,15 +281,15 @@ function NotesTab({ clientId }: { clientId: string }) {
 
   return (
     <div>
-      <div className="mb-4 flex gap-2">
-        <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" className="flex-1 rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[13.5px]" />
+      <form className="mb-4 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (draft.trim()) { addNote(clientId, draft); setDraft(''); } }}>
+        <input aria-label="New note" value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Add a note…" className="min-w-0 flex-1 rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[13.5px]" />
         <button
-          onClick={() => { addNote(clientId, draft); setDraft(''); }}
+          type="submit"
           className="flex-none rounded-[10px] bg-plum-600 px-4 py-2.5 text-[13px] font-bold text-white hover:bg-plum-700"
         >
           Add Note
         </button>
-      </div>
+      </form>
       {client.notes.length === 0 ? (
         <EmptyState text="No notes yet." />
       ) : (
@@ -279,6 +308,7 @@ function NotesTab({ clientId }: { clientId: string }) {
 
 function PaymentsTab({ clientId }: { clientId: string }) {
   const state = useStore((s) => s);
+  const voidPayment = useStore((s) => s.voidPayment);
   const payments = state.payments.filter((p) => p.clientId === clientId).sort((a, b) => b.date.localeCompare(a.date));
 
   if (payments.length === 0) return <EmptyState text="No payments recorded yet." />;
@@ -286,12 +316,15 @@ function PaymentsTab({ clientId }: { clientId: string }) {
   return (
     <div className="flex flex-col gap-2">
       {payments.map((p) => (
-        <div key={p.id} className="flex items-center justify-between rounded-xl border border-ivory-400 bg-white px-4 py-3">
-          <div>
-            <div className="text-[13.5px] font-bold capitalize text-ink-900">{p.type.replace('-', ' ')}</div>
-            <div className="text-[12px] text-ink-400">{formatDateShort(p.date)} · {p.method}{p.note ? ` · ${p.note}` : ''}</div>
+        <div key={p.id} className={`flex items-center justify-between gap-3 rounded-xl border border-ivory-400 bg-white px-4 py-3 ${p.voided ? 'opacity-60' : ''}`}>
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-bold capitalize text-ink-900">{p.type.replace('-', ' ')}{p.voided ? ' · voided' : ''}</div>
+            <div className="text-[12px] text-ink-400">{formatDateShort(p.date)} · {p.method}{p.tip ? ` · incl. ${state.business.currencySymbol}${p.tip.toFixed(2)} tip` : ''}{p.note ? ` · ${p.note}` : ''}</div>
           </div>
-          <span className="text-[14px] font-bold text-good-600">+{state.business.currencySymbol}{p.amount.toFixed(0)}</span>
+          <div className="flex flex-none items-center gap-2">
+            <span className={`text-[14px] font-bold ${p.voided ? 'text-ink-400 line-through' : 'text-good-600'}`}>+{state.business.currencySymbol}{p.amount.toFixed(2)}</span>
+            {!p.voided && <button onClick={() => voidPayment(p.id)} className="min-h-[32px] rounded-md border border-ivory-300 px-2 text-[11px] font-semibold text-ink-400 hover:border-bad-500 hover:text-bad-500">Void</button>}
+          </div>
         </div>
       ))}
     </div>
@@ -300,4 +333,38 @@ function PaymentsTab({ clientId }: { clientId: string }) {
 
 function EmptyState({ text }: { text: string }) {
   return <div className="rounded-2xl border border-dashed border-ivory-400 py-10 text-center text-[13px] text-ink-400">{text}</div>;
+}
+
+function ContactEditor({ clientId, onDone }: { clientId: string; onDone: () => void }) {
+  const client = useStore((s) => s.clients.find((c) => c.id === clientId));
+  const update = useStore((s) => s.updateClientField);
+  const toast = useStore((s) => s.toast);
+  const [form, setForm] = useState({ name: client?.name ?? '', phone: client?.phone ?? '', email: client?.email ?? '', birthday: client?.birthday ?? '' });
+  if (!client) return null;
+  const inputCls = 'min-w-0 rounded-lg border border-ivory-400 px-2.5 py-2 text-[13px] text-ink-900';
+  return (
+    <form
+      className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!form.name.trim()) return toast('Name can’t be empty');
+        if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return toast('That email address doesn’t look right');
+        update(clientId, 'name', form.name.trim());
+        update(clientId, 'phone', form.phone.trim());
+        update(clientId, 'email', form.email.trim());
+        update(clientId, 'birthday', form.birthday);
+        toast('Client details saved');
+        onDone();
+      }}
+    >
+      <input aria-label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} />
+      <input aria-label="Phone" type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="Phone" className={inputCls} />
+      <input aria-label="Email" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="Email" className={inputCls} />
+      <input aria-label="Birthday" type="date" value={form.birthday ? `2000-${form.birthday}` : ''} onChange={(e) => setForm({ ...form, birthday: e.target.value.slice(5) })} className={inputCls} />
+      <div className="flex gap-2 sm:col-span-2">
+        <button type="submit" className="min-h-[40px] rounded-lg bg-plum-600 px-3.5 text-[12.5px] font-bold text-white">Save</button>
+        <button type="button" onClick={onDone} className="min-h-[40px] rounded-lg border border-ivory-400 px-3.5 text-[12.5px] font-semibold text-ink-700">Cancel</button>
+      </div>
+    </form>
+  );
 }

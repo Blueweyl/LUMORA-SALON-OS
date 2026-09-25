@@ -1,5 +1,28 @@
 @import "tailwindcss";
 
+/* Fonts are bundled into the app (no Google Fonts request) so Lumora looks right fully offline. */
+@font-face {
+  font-family: 'Newsreader';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('@fontsource-variable/newsreader/files/newsreader-latin-wght-normal.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Newsreader';
+  font-style: italic;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('@fontsource-variable/newsreader/files/newsreader-latin-wght-italic.woff2') format('woff2-variations');
+}
+@font-face {
+  font-family: 'Manrope';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url('@fontsource-variable/manrope/files/manrope-latin-wght-normal.woff2') format('woff2-variations');
+}
+
 @theme {
   --font-serif: 'Newsreader', ui-serif, Georgia, serif;
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
@@ -64,6 +87,12 @@
   ::-webkit-scrollbar-track { background: transparent; }
   input, textarea, select, button { font-family: var(--font-sans); }
   input:focus, textarea:focus, select:focus { outline: none; }
+  /* Visible keyboard focus everywhere (mouse clicks don't show it). */
+  :focus-visible { outline: 2px solid var(--color-plum-500); outline-offset: 2px; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--color-plum-500); outline-offset: 0; }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+  }
 }
 
 @layer utilities {

@@ -17,12 +17,12 @@ export function NewClientModal() {
 
   if (justAddedClient) {
     return (
-      <Modal onClose={dismissJustAdded} maxWidth={400}>
+      <Modal onClose={dismissJustAdded} maxWidth={400} labelledBy="client-added-title">
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-good-100 text-good-600">
             <Icon name="check" size={22} />
           </div>
-          <h2 className="mb-1.5 font-serif text-[22px] font-medium text-ink-900">{justAddedClient.name} added</h2>
+          <h2 id="client-added-title" className="mb-1.5 font-serif text-[22px] font-medium text-ink-900">{justAddedClient.name} added</h2>
           <p className="mb-6 text-[13.5px] text-ink-500">What would you like to do next?</p>
           <div className="mx-auto flex max-w-[280px] flex-col gap-2.5">
             <button onClick={bookForJustAdded} className="rounded-[10px] bg-plum-600 py-3 text-[14px] font-bold text-white hover:bg-plum-700">
@@ -43,24 +43,25 @@ export function NewClientModal() {
   if (!show) return null;
 
   return (
-    <Modal onClose={close}>
-      <ModalTitle>New Client</ModalTitle>
+    <Modal onClose={close} labelledBy="new-client-title">
+      <ModalTitle id="new-client-title">New Client</ModalTitle>
+      <form onSubmit={(e) => { e.preventDefault(); save(); }}>
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
           Full name
           <input autoFocus value={draft.name} onChange={(e) => update('name', e.target.value)} placeholder="e.g. Priya Nair" className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
         </label>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
             Phone
-            <input value={draft.phone} onChange={(e) => update('phone', e.target.value)} placeholder="(415) 555-0100" className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
+            <input type="tel" inputMode="tel" autoComplete="off" value={draft.phone} onChange={(e) => update('phone', e.target.value)} placeholder="(415) 555-0100" className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
           </label>
           <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
             Email
-            <input value={draft.email} onChange={(e) => update('email', e.target.value)} placeholder="priya@email.com" className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
+            <input type="email" inputMode="email" autoComplete="off" value={draft.email} onChange={(e) => update('email', e.target.value)} placeholder="priya@email.com" className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
           </label>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
             Birthday
             <input type="date" value={draft.birthday ? `2000-${draft.birthday}` : ''} onChange={(e) => update('birthday', e.target.value.slice(5))} className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px]" />
@@ -69,7 +70,7 @@ export function NewClientModal() {
             Preferred staff
             <select value={draft.preferredStaffId} onChange={(e) => update('preferredStaffId', e.target.value)} className="rounded-[10px] border border-ivory-400 bg-white px-3.5 py-2.5 text-[14px]">
               <option value="">No preference</option>
-              {staff.map((st) => (
+              {staff.filter((st) => !st.archived).map((st) => (
                 <option key={st.id} value={st.id}>{st.name}</option>
               ))}
             </select>
@@ -85,9 +86,10 @@ export function NewClientModal() {
         </label>
       </div>
       <div className="mt-6 flex justify-end gap-2">
-        <button onClick={close} className="rounded-lg border border-ivory-400 px-4 py-2.5 text-sm font-semibold text-ink-700">Cancel</button>
-        <button onClick={save} className="rounded-lg bg-plum-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-plum-700">Save Client</button>
+        <button type="button" onClick={close} className="min-h-[44px] rounded-lg border border-ivory-400 px-4 py-2.5 text-sm font-semibold text-ink-700">Cancel</button>
+        <button type="submit" className="min-h-[44px] rounded-lg bg-plum-600 px-5 py-2.5 text-sm font-bold text-white hover:bg-plum-700">Save Client</button>
       </div>
+      </form>
     </Modal>
   );
 }
