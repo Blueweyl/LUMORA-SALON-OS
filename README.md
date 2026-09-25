@@ -45,6 +45,28 @@ file, so it works when opened straight from disk (`file://`) with no network.
   history, so past appointments and payments always keep their names and
   totals. Payments are voided (kept, struck through) rather than deleted.
 
+## Money rules (how the numbers always agree)
+
+- **Paid / owed** for a visit is worked out from its valid payments (voided ones
+  and tips excluded). Nothing can be recorded against a visit beyond what it
+  still owes, and a deposit can't exceed the booking total.
+- **Voids** never delete: the payment stays (struck through), the visit's
+  balance re-opens, and money paid from a gift card goes back onto that card.
+- **Gift cards** are money in when sold. Paying *with* one settles a bill but
+  is not counted as revenue again. Tips are never taken from a card. A card can
+  only be voided while unused.
+- **Deposits on cancellation / no-show**: the owner chooses to keep it as a fee,
+  move it to the client's store credit (spent at a later checkout like a gift
+  card) or refund it (voids the deposit). Late cancellations and no-shows
+  default to keeping the fee.
+- **Duplicates**: an identical payment for the same client within 10 minutes
+  asks before it is recorded; checkout can only complete once.
+- **Loyalty**: every points change (earned at checkout, redeemed) is logged on
+  the client; redeeming never lowers a VIP tier.
+
+`tests/finance.test.ts` covers these rules plus a randomised stress test that
+runs 1,800 destructive operations and checks the ledger after each one.
+
 ## Structure
 
 - `src/types.ts` — domain types (clients, appointments, services, inventory, …)

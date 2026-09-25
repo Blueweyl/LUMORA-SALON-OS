@@ -6,6 +6,7 @@ import { formatDateLong, formatDateShort, formatRelative, formatBirthday, format
 import { getNextApptForClient, getOutstandingAppointments, getOutstandingForClient, serviceNames, apptTotal, staffName } from '../lib/selectors';
 import { TIER_COLORS, TIER_LABEL } from '../lib/loyalty';
 import { statusMeta } from '../lib/status';
+import { paymentLabel } from '../lib/finance';
 import type { ClientTab } from '../store/types';
 import type { BeautyProfile } from '../types';
 
@@ -309,24 +310,53 @@ function NotesTab({ clientId }: { clientId: string }) {
 function PaymentsTab({ clientId }: { clientId: string }) {
   const state = useStore((s) => s);
   const voidPayment = useStore((s) => s.voidPayment);
-  const payments = state.payments.filter((p) => p.clientId === clientId).sort((a, b) => b.date.localeCompare(a.date));
-
-  if (payments.length === 0) return <EmptyState text="No payments recorded yet." />;
+  const cur = state.business.currencySymbol;
+  const client = state.clients.find((c) => c.id === clientId);
+  const payments = state.payments.filter((p) => p.clientId === clientId).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || '').localeCompare(a.createdAt || ''));
+  const cards = state.giftCards.filter((c) => c.clientId === clientId && !c.voided && c.balance > 0);
+  const log = client?.pointsLog || [];
 
   return (
-    <div className="flex flex-col gap-2">
-      {payments.map((p) => (
-        <div key={p.id} className={`flex items-center justify-between gap-3 rounded-xl border border-ivory-400 bg-white px-4 py-3 ${p.voided ? 'opacity-60' : ''}`}>
-          <div className="min-w-0">
-            <div className="text-[13.5px] font-bold capitalize text-ink-900">{p.type.replace('-', ' ')}{p.voided ? ' · voided' : ''}</div>
-            <div className="text-[12px] text-ink-400">{formatDateShort(p.date)} · {p.method}{p.tip ? ` · incl. ${state.business.currencySymbol}${p.tip.toFixed(2)} tip` : ''}{p.note ? ` · ${p.note}` : ''}</div>
-          </div>
-          <div className="flex flex-none items-center gap-2">
-            <span className={`text-[14px] font-bold ${p.voided ? 'text-ink-400 line-through' : 'text-good-600'}`}>+{state.business.currencySymbol}{p.amount.toFixed(2)}</span>
-            {!p.voided && <button onClick={() => voidPayment(p.id)} className="min-h-[32px] rounded-md border border-ivory-300 px-2 text-[11px] font-semibold text-ink-400 hover:border-bad-500 hover:text-bad-500">Void</button>}
-          </div>
+    <div className="flex flex-col gap-5">
+      {cards.length > 0 && (
+        <div className="rounded-xl border border-good-100 bg-good-100/40 px-4 py-3 text-[13px] text-good-600">
+          <b>Store credit &amp; gift cards: {cur}{cards.reduce((sum, c) => sum + c.balance, 0).toFixed(2)}</b>
+          <span className="text-ink-500"> — {cards.map((c) => `${c.code} (${cur}${c.balance.toFixed(2)})`).join(', ')}. Choose it at checkout to use it.</span>
         </div>
-      ))}
+      )}
+      {payments.length === 0 ? (
+        <EmptyState text="No payments recorded yet." />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {payments.map((p) => (
+            <div key={p.id} className={`flex items-center justify-between gap-3 rounded-xl border border-ivory-400 bg-white px-4 py-3 ${p.voided ? 'opacity-60' : ''}`}>
+              <div className="min-w-0">
+                <div className="text-[13.5px] font-bold capitalize text-ink-900">{paymentLabel(p)}{p.voided ? ' · voided' : ''}</div>
+                <div className="text-[12px] text-ink-400">{formatDateShort(p.date)} · {p.method}{p.tip ? ` · incl. ${cur}${p.tip.toFixed(2)} tip` : ''}{p.note ? ` · ${p.note}` : ''}</div>
+              </div>
+              <div className="flex flex-none items-center gap-2">
+                <span className={`text-[14px] font-bold ${p.voided ? 'text-ink-400 line-through' : p.method === 'Gift card' ? 'text-ink-500' : 'text-good-600'}`}>{p.method === 'Gift card' ? '' : '+'}{cur}{p.amount.toFixed(2)}</span>
+                {!p.voided && <button onClick={() => voidPayment(p.id)} className="min-h-[32px] rounded-md border border-ivory-300 px-2 text-[11px] font-semibold text-ink-400 hover:border-bad-500 hover:text-bad-500">Void</button>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div>
+        <div className="mb-2 text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Loyalty points history · {client?.loyaltyPoints ?? 0} pts now</div>
+        {log.length === 0 ? (
+          <div className="text-[12.5px] text-ink-400">Points earned at checkout and rewards redeemed are listed here.</div>
+        ) : (
+          <div className="overflow-hidden rounded-xl border border-ivory-400 bg-white">
+            {log.slice(0, 50).map((e) => (
+              <div key={e.id} className="flex items-center justify-between gap-3 border-t border-ivory-200 px-4 py-2.5 text-[13px] first:border-t-0">
+                <span className="min-w-0 truncate text-ink-700">{e.reason} <span className="text-ink-400">· {formatDateShort(e.date)}</span></span>
+                <span className={`flex-none font-bold ${e.delta >= 0 ? 'text-good-600' : 'text-bad-600'}`}>{e.delta >= 0 ? '+' : '−'}{Math.abs(e.delta)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -337,8 +367,7 @@ function EmptyState({ text }: { text: string }) {
 
 function ContactEditor({ clientId, onDone }: { clientId: string; onDone: () => void }) {
   const client = useStore((s) => s.clients.find((c) => c.id === clientId));
-  const update = useStore((s) => s.updateClientField);
-  const toast = useStore((s) => s.toast);
+  const saveContact = useStore((s) => s.saveClientContact);
   const [form, setForm] = useState({ name: client?.name ?? '', phone: client?.phone ?? '', email: client?.email ?? '', birthday: client?.birthday ?? '' });
   if (!client) return null;
   const inputCls = 'min-w-0 rounded-lg border border-ivory-400 px-2.5 py-2 text-[13px] text-ink-900';
@@ -347,14 +376,7 @@ function ContactEditor({ clientId, onDone }: { clientId: string; onDone: () => v
       className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2"
       onSubmit={(e) => {
         e.preventDefault();
-        if (!form.name.trim()) return toast('Name can’t be empty');
-        if (form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return toast('That email address doesn’t look right');
-        update(clientId, 'name', form.name.trim());
-        update(clientId, 'phone', form.phone.trim());
-        update(clientId, 'email', form.email.trim());
-        update(clientId, 'birthday', form.birthday);
-        toast('Client details saved');
-        onDone();
+        saveContact(clientId, form, onDone);
       }}
     >
       <input aria-label="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} />

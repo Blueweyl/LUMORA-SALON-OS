@@ -1,7 +1,8 @@
 import { useStore } from '../../store/store';
 import { Modal } from '../ui/Modal';
 import { Icon } from '../icons';
-import { apptBill, apptOutstanding, getNextApptForClient } from '../../lib/selectors';
+import { apptBill, apptOutstanding, getNextApptForClient, rebookWeeksFor } from '../../lib/selectors';
+import { isMoneyIn } from '../../lib/finance';
 import { formatDateLong, formatTime, todayISO } from '../../lib/dates';
 
 export function CompleteScreenModal() {
@@ -14,9 +15,11 @@ export function CompleteScreenModal() {
   if (!appt) return null;
   const client = state.clients.find((c) => c.id === appt.clientId);
   const cur = state.business.currencySymbol;
-  const weeks = state.business.rebookWeeks;
+  const weeks = rebookWeeksFor(state, appt.serviceIds);
   const today = todayISO();
-  const collectedToday = state.payments.filter((p) => p.apptId === appt.id && !p.voided && p.date === today).reduce((sum, p) => sum + p.amount, 0);
+  const todays = state.payments.filter((p) => p.apptId === appt.id && !p.voided && p.date === today);
+  const collectedToday = todays.filter(isMoneyIn).reduce((sum, p) => sum + p.amount, 0);
+  const fromCards = todays.filter((p) => p.method === 'Gift card').reduce((sum, p) => sum + p.amount, 0);
   const owed = apptOutstanding(state, appt);
   const next = getNextApptForClient(state, appt.clientId);
   const first = client?.name.split(' ')[0] ?? 'Client';
@@ -31,6 +34,7 @@ export function CompleteScreenModal() {
         <p className="mb-1 text-[14px] text-ink-500">
           {first} is all set — visit total {cur}{apptBill(appt).toFixed(2)}{appt.tip > 0 ? ` + ${cur}${appt.tip.toFixed(2)} tip` : ''}.
           {collectedToday > 0 && <> {cur}{collectedToday.toFixed(2)} collected today.</>}
+          {fromCards > 0 && <> {cur}{fromCards.toFixed(2)} paid from gift card / credit.</>}
         </p>
         {owed > 0 && <p className="mb-1 text-[12.5px] font-semibold text-bad-600">{cur}{owed.toFixed(2)} still owed</p>}
         {client && client.loyaltyPoints > 0 && (

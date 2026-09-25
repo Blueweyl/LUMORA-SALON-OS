@@ -164,6 +164,91 @@ const noHScroll = async (page) => page.evaluate(() => document.documentElement.s
     assert((await page.getByText('Unpaid Visits').count()) === 0, 'still unpaid');
   });
 
+  await step('gift card: sell it, then pay part of a checkout with it and the rest by card', async () => {
+    await page.getByRole('button', { name: '+ Sell Gift Card' }).click();
+    const dlg = page.getByRole('dialog');
+    await dlg.getByRole('heading', { name: 'Sell a Gift Card' }).waitFor();
+    const sel = dlg.getByLabel('Bought by');
+    await sel.selectOption(await sel.locator('option', { hasText: 'Olivia Chen' }).first().getAttribute('value'));
+    await dlg.getByLabel(/Gift card value/).fill('30');
+    await dlg.getByRole('button', { name: 'Sell $30.00 Gift Card' }).click();
+    const toast = await page.getByText(/Gift card LUM-\d{4} sold/).textContent();
+    const code = toast.match(/LUM-\d{4}/)[0];
+    await page.getByText(code, { exact: false }).first().waitFor();
+    await page.getByRole('button', { name: 'Home' }).first().click();
+    await page.getByRole('button', { name: /Olivia Chen/ }).first().click();
+    const appt = page.getByRole('dialog');
+    await appt.getByRole('button', { name: 'Check In' }).click();
+    await appt.getByRole('button', { name: 'Start Service' }).click();
+    const gc = appt.getByLabel('Gift card / store credit');
+    await gc.selectOption(await gc.locator('option', { hasText: code }).getAttribute('value'));
+    await appt.getByText(`Paid from ${code}`).waitFor();
+    await shot(page, 'desktop-checkout-giftcard');
+    await appt.getByRole('button', { name: 'Complete & Charge $10.00' }).click();
+    await page.getByText(/\$30\.00 paid from gift card/).waitFor();
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('button', { name: 'Money' }).first().click();
+    await page.getByRole('tab', { name: 'Payments' }).click();
+    await page.getByText('paid from gift card / credit').first().waitFor();
+  });
+
+  await step('record payment refuses more than is owed, then accepts the exact amount', async () => {
+    await page.getByRole('button', { name: 'Quick add' }).click();
+    await page.getByRole('menuitem', { name: 'Record Payment' }).click();
+    const dlg = page.getByRole('dialog');
+    const client = dlg.getByLabel('Client');
+    await client.selectOption(await client.locator('option', { hasText: 'David Kim' }).first().getAttribute('value'));
+    const forWhat = dlg.getByLabel('What is this payment for?');
+    await forWhat.selectOption(await forWhat.locator('option', { hasText: 'left to pay' }).first().getAttribute('value'));
+    await dlg.getByLabel(/Amount/).fill('500');
+    await dlg.getByRole('alert').filter({ hasText: 'more than the $65.00' }).waitFor();
+    assert((await dlg.getByRole('button', { name: 'Record Payment' }).getAttribute('aria-disabled')) === 'true', 'record not marked disabled');
+    await dlg.getByRole('button', { name: 'Record Payment' }).click({ force: true });
+    await page.getByText(/That's more than the \$65\.00/).first().waitFor();
+    assert(await dlg.getByRole('heading', { name: 'Record Payment' }).isVisible(), 'dialog closed on overpayment');
+    await dlg.getByLabel(/Amount/).fill('65');
+    await dlg.getByRole('button', { name: 'Record Payment' }).click();
+    await page.getByText('Payment recorded').first().waitFor();
+  });
+
+  await step('a repeated payment asks before recording it twice', async () => {
+    for (let i = 0; i < 2; i++) {
+      await page.getByRole('button', { name: 'Quick add' }).click();
+      await page.getByRole('menuitem', { name: 'Record Payment' }).click();
+      const dlg = page.getByRole('dialog');
+      const client = dlg.getByLabel('Client');
+      await client.selectOption(await client.locator('option', { hasText: 'Ben Carter' }).first().getAttribute('value'));
+      await dlg.getByLabel(/Amount/).fill('12');
+      await dlg.getByLabel('Type').selectOption('product');
+      await dlg.getByRole('button', { name: 'Record Payment' }).click();
+    }
+    await page.getByText('This looks like a duplicate').waitFor();
+    await page.getByRole('button', { name: 'Don’t Record' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+    const n = await page.evaluate(() => {
+      const raw = localStorage.getItem('lumora-salon-os-v1') || '';
+      return raw.startsWith('GZ1:') ? -1 : JSON.parse(raw).state.payments.filter((p) => p.amount === 12 && p.type === 'product').length;
+    });
+    assert(n === -1 || n === 1, `expected one $12 payment, saw ${n}`);
+  });
+
+  await step('cancelling a booking with a deposit asks what happens to it; store credit is created', async () => {
+    await page.getByRole('button', { name: 'Home' }).first().click();
+    await page.getByRole('button', { name: /David Kim/ }).first().click();
+    const dlg = page.getByRole('dialog');
+    await dlg.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByText(/paid a \$85\.00 deposit/).waitFor();
+    await page.getByRole('radio', { name: /Move it to store credit/ }).click();
+    await shot(page, 'desktop-deposit-choice');
+    await page.getByRole('button', { name: 'Cancel Appointment' }).click();
+    await page.getByText(/\$85\.00 added to store credit/).waitFor();
+    await page.getByText(/opening to fill/).waitFor(); // the gap-filling prompt follows every cancellation
+    await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('button', { name: 'Money' }).first().click();
+    await page.getByRole('tab', { name: 'Payments' }).click();
+    await page.getByText('Store credit').first().waitFor();
+  });
+
   await step('settings shows device storage + backup status; export downloads a backup', async () => {
     await page.getByRole('button', { name: 'Settings' }).first().click();
     await page.getByRole('tab', { name: 'Data' }).click();
@@ -171,7 +256,7 @@ const noHScroll = async (page) => page.evaluate(() => document.documentElement.s
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export Backup' }).click()]);
     const file = await dl.path();
     const json = JSON.parse(fs.readFileSync(file, 'utf8'));
-    assert(json.app === 'lumora-salon-os' && json.schemaVersion === 2 && Array.isArray(json.data.clients), 'bad backup format');
+    assert(json.app === 'lumora-salon-os' && json.schemaVersion === 3 && Array.isArray(json.data.clients), 'bad backup format');
     fs.writeFileSync('/tmp/lumora-e2e-backup.json', JSON.stringify(json));
     await page.getByText('Last backup').waitFor();
   });
@@ -318,6 +403,23 @@ const noHScroll = async (page) => page.evaluate(() => document.documentElement.s
     const d2 = await page.getByRole('dialog').boundingBox();
     assert(d2 && d2.width <= 360, 'checkout dialog too wide');
     await shot(page, 'mobile-checkout');
+    await page.keyboard.press('Escape');
+  });
+
+  await step('mobile: payment and deposit dialogs fit the screen', async () => {
+    await page.getByRole('button', { name: 'Quick add' }).click();
+    await page.getByRole('menuitem', { name: 'Record Payment' }).click();
+    const b1 = await page.getByRole('dialog').boundingBox();
+    assert(b1 && b1.width <= 360 && b1.x >= 0, 'record payment dialog too wide');
+    assert(await noHScroll(page), 'record payment overflows');
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel' }).click();
+    await page.getByRole('button', { name: /David Kim/ }).first().click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('radio', { name: /Refund it/ }).waitFor();
+    const b2 = await page.getByRole('dialog').last().boundingBox();
+    assert(b2 && b2.width <= 360, 'deposit choice dialog too wide');
+    await shot(page, 'mobile-deposit-choice');
+    await page.getByRole('button', { name: 'Go Back' }).click();
     await page.keyboard.press('Escape');
   });
 

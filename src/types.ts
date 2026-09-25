@@ -23,6 +23,7 @@ export interface Service {
   overhead: number;
   active: boolean;
   targetMargin: number; // 0-1
+  rebookWeeks?: number; // service-specific rebooking cycle; falls back to the business default
 }
 
 export interface BeautyProfile {
@@ -73,6 +74,15 @@ export interface Client {
   status: 'active' | 'lead' | 'inactive';
   referredBy?: string;
   archived?: boolean; // hidden from lists/booking, kept for history
+  pointsLog?: PointsEntry[]; // newest first; every loyalty points change with its reason
+}
+
+export interface PointsEntry {
+  id: ID;
+  date: string;
+  delta: number; // + earned, − redeemed/adjusted
+  reason: string;
+  apptId?: ID;
 }
 
 export type AppointmentStatus =
@@ -111,7 +121,11 @@ export interface Appointment {
   tip: number;
   productsSold: ProductSoldLine[];
   cancelReason?: string;
+  depositOutcome?: DepositOutcome; // what happened to a paid deposit when the visit was cancelled / no-show
 }
+
+/** kept = cancellation fee, refunded = deposit payment voided, credit = moved to the client's store credit. */
+export type DepositOutcome = 'kept' | 'refunded' | 'credit';
 
 export interface InventoryItem {
   id: ID;
@@ -131,9 +145,13 @@ export interface Payment {
   clientId: ID;
   apptId: ID | null;
   amount: number;
-  method: 'Card' | 'Cash';
+  /** 'Gift card' = paid from a gift card / store credit balance (not new money). */
+  method: 'Card' | 'Cash' | 'Gift card';
+  /** 'gift-card' = a gift card was sold (money in; the card's balance is owed back as services). */
   type: 'deposit' | 'balance' | 'full' | 'product' | 'package' | 'gift-card';
   date: string;
+  createdAt?: string; // ISO timestamp, used to catch accidental duplicate entries
+  giftCardId?: ID; // card redeemed (method 'Gift card') or card sold (type 'gift-card')
   note?: string;
   tip?: number; // portion of amount that is a tip (not applied to the bill)
   voided?: boolean; // voided payments are kept for audit but excluded from totals
@@ -175,6 +193,10 @@ export interface GiftCard {
   balance: number;
   purchasedBy: string;
   issuedDate: string;
+  kind?: 'gift' | 'credit'; // credit = store credit owed to a client (e.g. a deposit kept for a later visit)
+  clientId?: ID; // holder, for store credit (and gift cards sold to a known client)
+  voided?: boolean; // sale voided before use; kept for records
+  sourceApptId?: ID; // store credit created from this appointment's deposit
 }
 
 export interface LoyaltyReward {

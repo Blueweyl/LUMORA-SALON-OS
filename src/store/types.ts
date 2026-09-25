@@ -77,6 +77,13 @@ export interface CheckoutDraft {
   tip: number;
   payMethod: 'Card' | 'Cash';
   productSelections: Record<string, number>; // inventoryItemId -> qty
+  giftCardId: string; // gift card / store credit applied first ('' = none)
+}
+
+export interface ConfirmChoice {
+  value: string;
+  label: string;
+  hint?: string;
 }
 
 export interface ConfirmDialogState {
@@ -86,11 +93,24 @@ export interface ConfirmDialogState {
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
+  choices?: ConfirmChoice[]; // optional radio choice passed to onConfirm
+  choice?: string;
+  onConfirmChoice?: (choice: string) => void;
 }
 
 export interface CopyMessageState {
   title: string;
   message: string;
+}
+
+export interface RecordPaymentDraft {
+  clientId: string;
+  apptId: string;
+  amount: number;
+  method: 'Card' | 'Cash' | 'Gift card';
+  type: 'full' | 'deposit' | 'balance' | 'product' | 'package' | 'gift-card';
+  note: string;
+  giftCardId: string; // card paid from when method is 'Gift card'
 }
 
 export interface Domain {
@@ -158,7 +178,7 @@ export interface UIState {
   pricingServiceId: string;
 
   showRecordPayment: boolean;
-  recordPaymentDraft: { clientId: string; apptId: string; amount: number; method: 'Card' | 'Cash'; type: 'full' | 'deposit' | 'balance' | 'product' | 'package' | 'gift-card'; note: string };
+  recordPaymentDraft: RecordPaymentDraft;
 
   showArchivedClients: boolean;
   pendingImport: PendingImport | null;

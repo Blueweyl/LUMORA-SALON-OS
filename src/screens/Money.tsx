@@ -3,7 +3,8 @@ import { useStore } from '../store/store';
 import { Icon } from '../components/icons';
 import { formatDateShort, todayISO } from '../lib/dates';
 import { serviceCost, serviceMargin, serviceProfit, suggestedPrice } from '../lib/pricing';
-import { apptOutstanding, clientName, getAvgTicket, getExpensesThisMonth, getLowStockItems, getNetProfit, getOutstandingAppointments, getOutstandingTotal, getRevenueThisMonth, getServiceProfitability, getTipsThisMonth, serviceNames, servicesLeft } from '../lib/selectors';
+import { apptOutstanding, clientName, getAvgTicket, getExpensesThisMonth, getGiftCardLiability, getLowStockItems, getNetProfit, getOutstandingAppointments, getOutstandingTotal, getRevenueThisMonth, getServiceProfitability, getTipsThisMonth, serviceNames, servicesLeft } from '../lib/selectors';
+import { isMoneyIn, paymentLabel } from '../lib/finance';
 import type { MoneyTab } from '../store/types';
 
 const TABS: MoneyTab[] = ['Overview', 'Pricing', 'Payments', 'Expenses', 'Inventory'];
@@ -55,7 +56,7 @@ function OverviewTab() {
   return (
     <div>
       <div className="mb-5 grid grid-cols-2 gap-3.5 md:grid-cols-5">
-        <Tile label="Revenue this month" value={`${cur}${revenue.toFixed(0)}`} sub={tips > 0 ? `incl. ${cur}${tips.toFixed(0)} tips` : undefined} />
+        <Tile label="Revenue this month" value={`${cur}${revenue.toFixed(0)}`} sub={`cash & card received${tips > 0 ? ` · incl. ${cur}${tips.toFixed(0)} tips` : ''}`} />
         <Tile label="Expenses this month" value={`${cur}${expenses.toFixed(0)}`} />
         <Tile label="Net Profit" value={`${cur}${net.toFixed(0)}`} color={net >= 0 ? 'var(--color-good-600)' : 'var(--color-bad-600)'} />
         <Tile label="Outstanding" value={`${cur}${outstanding.toFixed(0)}`} color="var(--color-bad-600)" />
@@ -154,6 +155,15 @@ function PricingCalculator() {
           <NumField label={`Hourly labor cost (${cur})`} value={sv.hourlyRate} onChange={(v) => updateField(sv.id, 'hourlyRate', v)} />
           <NumField label={`Overhead allocation (${cur})`} value={sv.overhead} onChange={(v) => updateField(sv.id, 'overhead', v)} />
           <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
+            Clients should rebook every
+            <select value={sv.rebookWeeks || 0} onChange={(e) => updateField(sv.id, 'rebookWeeks', Number(e.target.value))} className="rounded-[10px] border border-ivory-400 bg-white px-3.5 py-2.5 text-[14px] font-normal">
+              <option value={0}>Business default ({state.business.rebookWeeks} weeks)</option>
+              {[1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 26].map((w) => (
+                <option key={w} value={w}>{w} week{w === 1 ? '' : 's'}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
             Target margin ({(sv.targetMargin * 100).toFixed(0)}%)
             <input type="range" min={10} max={70} value={sv.targetMargin * 100} onChange={(e) => updateField(sv.id, 'targetMargin', Number(e.target.value) / 100)} />
           </label>
@@ -218,8 +228,13 @@ function PaymentsTab() {
   const cur = state.business.currencySymbol;
   const [limit, setLimit] = useState(100);
   const sorted = [...state.payments].sort((a, b) => b.date.localeCompare(a.date));
-  const total = sorted.filter((p) => !p.voided).reduce((sum, p) => sum + p.amount, 0);
+  const total = sorted.filter(isMoneyIn).reduce((sum, p) => sum + p.amount, 0);
   const unpaid = getOutstandingAppointments(state);
+  const voidGiftCard = useStore((s) => s.voidGiftCard);
+  const cards = [...state.giftCards].sort((a, b) => Number(!!a.voided) - Number(!!b.voided) || Number(a.balance <= 0) - Number(b.balance <= 0) || b.issuedDate.localeCompare(a.issuedDate));
+  const [showUsedCards, setShowUsedCards] = useState(false);
+  const liability = getGiftCardLiability(state);
+  const visibleCards = showUsedCards ? cards : cards.filter((c) => !c.voided && c.balance > 0);
 
   return (
     <div className="flex flex-col gap-5">
@@ -244,9 +259,39 @@ function PaymentsTab() {
         </div>
       )}
       <div className="overflow-hidden rounded-2xl border border-ivory-400 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ivory-400 px-5 py-3.5">
+          <div>
+            <div className="text-[11.5px] font-bold uppercase tracking-wide text-ink-400">Gift Cards &amp; Store Credit</div>
+            <div className="text-[12px] text-ink-400">{liability > 0 ? `${cur}${liability.toFixed(2)} unspent — owed to clients as services` : 'Nothing unspent'}</div>
+          </div>
+          <button onClick={() => openRecordPayment(undefined, undefined, 'gift-card')} className="min-h-[36px] rounded-md bg-plum-600 px-3 text-[12px] font-bold text-white">+ Sell Gift Card</button>
+        </div>
+        {visibleCards.length === 0 ? (
+          <div className="px-5 py-6 text-center text-[13px] text-ink-400">{cards.length ? 'All gift cards have been used.' : 'No gift cards yet. Sold cards and store credit appear here and can be used at checkout.'}</div>
+        ) : (
+          visibleCards.slice(0, 50).map((c) => (
+            <div key={c.id} className={`flex flex-wrap items-center justify-between gap-2 border-t border-ivory-200 px-5 py-3 ${c.voided || c.balance <= 0 ? 'opacity-60' : ''}`}>
+              <div className="min-w-0">
+                <div className="truncate text-[13.5px] font-bold text-ink-900">{c.code} <span className="font-semibold text-ink-400">· {c.kind === 'credit' ? 'Store credit' : 'Gift card'}</span></div>
+                <div className="text-[12px] text-ink-400">{c.clientId ? clientName(state, c.clientId) : c.purchasedBy || '—'} · issued {formatDateShort(c.issuedDate)}{c.voided ? (c.kind === 'credit' ? ' · refunded' : ' · voided') : ''}</div>
+              </div>
+              <div className="flex flex-none items-center gap-2">
+                <span className={`text-[14px] font-bold ${c.voided ? 'text-ink-400 line-through' : 'text-ink-900'}`}>{cur}{c.balance.toFixed(2)}<span className="text-[12px] font-semibold text-ink-400"> / {cur}{c.initialValue.toFixed(2)}</span></span>
+                {!c.voided && Math.abs(c.balance - c.initialValue) < 0.005 && (
+                  <button onClick={() => voidGiftCard(c.id)} className="min-h-[32px] rounded-md border border-ivory-300 px-2 text-[11px] font-semibold text-ink-400 hover:border-bad-500 hover:text-bad-500">{c.kind === 'credit' ? 'Refund' : 'Void'}</button>
+                )}
+              </div>
+            </div>
+          ))
+        )}
+        {cards.some((c) => c.voided || c.balance <= 0) && (
+          <button onClick={() => setShowUsedCards(!showUsedCards)} className="min-h-[44px] w-full border-t border-ivory-200 text-[12.5px] font-bold text-plum-600">{showUsedCards ? 'Hide used & voided cards' : 'Show used & voided cards'}</button>
+        )}
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-ivory-400 bg-white">
         <div className="flex items-center justify-between border-b border-ivory-400 px-5 py-3.5">
           <div className="text-[11.5px] font-bold uppercase tracking-wide text-ink-400">All Payments</div>
-          <div className="text-[13px] font-bold text-ink-900">{cur}{total.toFixed(2)} total</div>
+          <div className="text-[13px] font-bold text-ink-900">{cur}{total.toFixed(2)} received</div>
         </div>
         {sorted.length === 0 ? (
           <div className="px-5 py-10 text-center text-[13px] text-ink-400">No payments recorded yet. Payments appear here when you check out a client or record one.</div>
@@ -255,10 +300,10 @@ function PaymentsTab() {
             <div key={p.id} className={`flex items-center justify-between gap-3 border-t border-ivory-200 px-5 py-3 ${p.voided ? 'opacity-60' : ''}`}>
               <div className="min-w-0">
                 <div className="truncate text-[13.5px] font-bold text-ink-900">{clientName(state, p.clientId)}</div>
-                <div className="text-[12px] capitalize text-ink-400">{p.type.replace('-', ' ')} · {p.method} · {formatDateShort(p.date)}{p.tip ? ` · incl. ${cur}${p.tip.toFixed(2)} tip` : ''}{p.voided ? ' · voided' : ''}</div>
+                <div className="text-[12px] text-ink-400"><span className="capitalize">{paymentLabel(p)}</span> · {p.method} · {formatDateShort(p.date)}{p.tip ? ` · incl. ${cur}${p.tip.toFixed(2)} tip` : ''}{p.note ? ` · ${p.note}` : ''}{p.voided ? ' · voided' : ''}</div>
               </div>
               <div className="flex flex-none items-center gap-2">
-                <span className={`text-[14px] font-bold ${p.voided ? 'text-ink-400 line-through' : 'text-good-600'}`}>+{cur}{p.amount.toFixed(2)}</span>
+                <span className={`text-[14px] font-bold ${p.voided ? 'text-ink-400 line-through' : p.method === 'Gift card' ? 'text-ink-500' : 'text-good-600'}`} title={p.method === 'Gift card' ? 'Paid from a gift card / credit — not new money' : undefined}>{p.method === 'Gift card' ? '' : '+'}{cur}{p.amount.toFixed(2)}</span>
                 {!p.voided && <button onClick={() => voidPayment(p.id)} aria-label={`Void ${cur}${p.amount.toFixed(2)} payment`} className="min-h-[32px] rounded-md border border-ivory-300 px-2 text-[11px] font-semibold text-ink-400 hover:border-bad-500 hover:text-bad-500">Void</button>}
               </div>
             </div>

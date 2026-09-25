@@ -3,7 +3,7 @@ import { useStore } from '../../store/store';
 import { Modal, ModalTitle } from '../ui/Modal';
 import { Icon } from '../icons';
 import { Pill } from '../ui/Badge';
-import { apptBill, apptOutstanding, apptPaid, apptTotal, clientName, getServices, inventoryUsage, servicesLeft, staffName } from '../../lib/selectors';
+import { apptBill, apptOutstanding, apptPaid, apptTotal, cardsForClient, clientName, getServices, inventoryUsage, servicesLeft, staffName } from '../../lib/selectors';
 import { formatDateLong, formatDuration, formatTime, todayISO } from '../../lib/dates';
 import { statusMeta } from '../../lib/status';
 
@@ -18,6 +18,7 @@ export function ApptDetailModal() {
   const rebookClient = useStore((s) => s.rebookClient);
   const updateTip = useStore((s) => s.updateCheckoutTip);
   const setPayMethod = useStore((s) => s.setCheckoutPayMethod);
+  const setGiftCard = useStore((s) => s.setCheckoutGiftCard);
   const setProductQty = useStore((s) => s.setCheckoutProductQty);
   const completeCheckout = useStore((s) => s.completeCheckout);
   const checkout = useStore((s) => s.checkoutDraft);
@@ -45,7 +46,12 @@ export function ApptDetailModal() {
   }, 0);
   const servicesTotal = apptTotal(appt);
   const balance = Math.max(0, servicesTotal - paid);
-  const chargeNow = Math.round((Math.max(0, servicesTotal + productsTotal - paid) + checkout.tip) * 100) / 100;
+  const dueBeforeTip = Math.round(Math.max(0, servicesTotal + productsTotal - paid) * 100) / 100;
+  const cards = cardsForClient(state, appt.clientId);
+  const card = cards.find((c) => c.id === checkout.giftCardId);
+  const fromCard = card ? Math.min(card.balance, dueBeforeTip) : 0;
+  const chargeNow = Math.round((dueBeforeTip - fromCard + checkout.tip) * 100) / 100;
+  const overpaid = Math.round((paid - (servicesTotal + productsTotal)) * 100) / 100;
   const owed = apptOutstanding(state, appt);
   const money = (n: number) => `${cur}${n.toFixed(2)}`;
 
@@ -86,6 +92,11 @@ export function ApptDetailModal() {
 
       {appt.notes && <div className="mb-4 rounded-[10px] border border-ivory-400 p-3 text-[13px] text-ink-500"><b className="text-ink-700">Notes:</b> {appt.notes}</div>}
       {appt.cancelReason && appt.status === 'cancelled' && <div className="mb-4 text-[12.5px] text-ink-400">Reason: {appt.cancelReason}</div>}
+      {appt.depositOutcome && (
+        <div className="mb-4 text-[12.5px] font-semibold text-ink-500">
+          Deposit: {appt.depositOutcome === 'kept' ? 'kept as a cancellation fee' : appt.depositOutcome === 'credit' ? 'moved to the client’s store credit' : 'refunded'}
+        </div>
+      )}
 
       {!canCheckout ? (
         <div className="mb-2 flex flex-col gap-1 rounded-[10px] bg-ivory-100 px-3.5 py-3 text-[13px]">
@@ -95,15 +106,15 @@ export function ApptDetailModal() {
             <Line key={l.itemId} label={`${l.name ?? 'Product'} × ${l.qty}`} value={money(l.qty * l.price)} />
           ))}
           {appt.tip > 0 && <Line label="Tip" value={money(appt.tip)} />}
-          <Line label="Paid so far" value={money(paid + (appt.status === 'completed' ? appt.tip : 0))} />
+          <Line label={appt.status === 'cancelled' || appt.status === 'no-show' ? 'Deposit paid' : 'Paid so far'} value={money(paid + (appt.status === 'completed' ? appt.tip : 0))} />
           {appt.status === 'completed' ? (
             <div className="mt-1 flex justify-between border-t border-ivory-300 pt-1.5 text-[14px] font-bold" style={{ color: owed > 0 ? 'var(--color-bad-600)' : 'var(--color-good-600)' }}>
               <span>{owed > 0 ? 'Still owed' : 'Paid in full'}</span>
               <span>{owed > 0 ? money(owed) : money(apptBill(appt) + appt.tip)}</span>
             </div>
-          ) : (
+          ) : isOpen ? (
             <div className="mt-1 flex justify-between border-t border-ivory-300 pt-1.5 text-[14px] font-bold text-ink-900"><span>Balance at checkout</span><span>{money(balance)}</span></div>
-          )}
+          ) : null}
           {isOpen && isFuture && <p className="mt-1 text-[12px] text-ink-400">Check-in and checkout open on the day of the appointment.</p>}
         </div>
       ) : (
@@ -158,8 +169,22 @@ export function ApptDetailModal() {
             <input type="number" inputMode="decimal" min={0} value={checkout.tip || ''} onChange={(e) => updateTip(Number(e.target.value))} className="rounded-[10px] border border-ivory-400 px-3.5 py-2.5 text-[14px] font-normal text-ink-900" placeholder="0" />
           </label>
 
+          {cards.length > 0 && dueBeforeTip > 0 && (
+            <label className="flex flex-col gap-1.5 text-[12.5px] font-bold text-ink-500">
+              Gift card / store credit
+              <select value={checkout.giftCardId} onChange={(e) => setGiftCard(e.target.value)} className="rounded-[10px] border border-ivory-400 bg-white px-3.5 py-2.5 text-[14px] font-normal text-ink-900">
+                <option value="">Don’t use one</option>
+                {cards.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} · {money(c.balance)} left{c.clientId === appt.clientId ? (c.kind === 'credit' ? ' · this client’s credit' : ' · this client’s card') : c.purchasedBy ? ` · bought by ${c.purchasedBy}` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           <div>
-            <div className="mb-1.5 text-[12px] font-bold text-ink-500">Payment method</div>
+            <div className="mb-1.5 text-[12px] font-bold text-ink-500">{fromCard > 0 ? 'Pay the rest by' : 'Payment method'}</div>
             <div className="flex gap-2" role="radiogroup" aria-label="Payment method">
               {(['Card', 'Cash'] as const).map((m) => (
                 <button key={m} role="radio" aria-checked={checkout.payMethod === m} onClick={() => setPayMethod(m)} className={`min-h-[44px] flex-1 rounded-[10px] border py-2.5 text-[13px] font-bold ${checkout.payMethod === m ? 'border-plum-600 bg-plum-50 text-plum-600' : 'border-ivory-400 text-ink-500'}`}>
@@ -182,12 +207,14 @@ export function ApptDetailModal() {
               const item = state.inventory.find((i) => i.id === itemId);
               return item ? <Line key={itemId} label={`${item.name} × ${q}`} value={money(item.retailPrice * q)} /> : null;
             })}
+            {fromCard > 0 && card && <Line label={`Paid from ${card.code}`} value={`−${money(fromCard)}`} />}
             {checkout.tip > 0 && <Line label="Tip" value={money(checkout.tip)} />}
-            <div className="mt-1 flex justify-between border-t border-ivory-300 pt-1.5 text-[15px] font-bold text-ink-900"><span>Charge now</span><span>{money(chargeNow)}</span></div>
+            <div className="mt-1 flex justify-between border-t border-ivory-300 pt-1.5 text-[15px] font-bold text-ink-900"><span>Charge now{fromCard > 0 ? ` (${checkout.payMethod.toLowerCase()})` : ''}</span><span>{money(chargeNow)}</span></div>
+            {overpaid > 0.004 && <p className="mt-1 text-[12px] text-good-600">Already paid {money(overpaid)} more than this bill — it will be saved as store credit.</p>}
           </div>
 
           <button onClick={completeCheckout} className="min-h-[48px] w-full rounded-[10px] bg-plum-600 py-3.5 text-[14px] font-bold text-white hover:bg-plum-700">
-            Complete &amp; Charge {money(chargeNow)}
+            {chargeNow > 0 ? <>Complete &amp; Charge {money(chargeNow)}</> : 'Complete Checkout'}
           </button>
         </div>
       )}
@@ -208,6 +235,9 @@ export function ApptDetailModal() {
             <ActionBtn danger onClick={() => apptAction(appt.id, 'cancel')}>Cancel</ActionBtn>
             {!isFuture && <ActionBtn danger onClick={() => apptAction(appt.id, 'noshow')}>No-Show</ActionBtn>}
           </>
+        )}
+        {isOpen && balance > 0 && client && !client.archived && (
+          <ActionBtn onClick={() => { close(); openRecordPayment(appt.clientId, appt.id, 'deposit'); }}>{paid > 0 ? 'Add Deposit' : 'Take Deposit'}</ActionBtn>
         )}
         {appt.status === 'completed' && owed > 0 && client && (
           <ActionBtn primary onClick={() => { close(); openRecordPayment(appt.clientId, appt.id); }}>Record {money(owed)} Payment</ActionBtn>

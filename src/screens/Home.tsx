@@ -80,6 +80,7 @@ export function Home() {
 
   const goAttention = (item: (typeof attention)[number]) => {
     if (item.onClick === 'client' && item.targetId) openClient(item.targetId);
+    else if (item.onClick === 'record-payment' && item.targetId) openRecordPayment(item.targetId, item.apptId);
     else if (item.onClick === 'grow-retention') { setSection('grow'); setGrowTab('Retention'); }
     else if (item.onClick === 'money-inventory') { setSection('money'); setMoneyTab('Inventory'); }
     else if (item.onClick === 'money-pricing') { setSection('money'); setMoneyTab('Pricing'); if (item.targetId) setPricingServiceId(item.targetId); }
@@ -141,7 +142,7 @@ export function Home() {
                 <button key={item.id} onClick={() => goAttention(item)} className="flex min-h-[40px] items-center gap-2.5 rounded-[9px] px-2 py-2 text-left text-[13.5px] text-ink-900 hover:bg-ivory-100">
                   <span className="h-2 w-2 flex-none rounded-full" style={{ background: item.color }} />
                   <span className="min-w-0 flex-1">{item.text}</span>
-                  <Icon name="chevron-right" size={13} className="flex-none text-ink-300" />
+                  <span className="flex-none rounded-md bg-plum-50 px-2 py-1 text-[11.5px] font-bold text-plum-600">{item.action}</span>
                 </button>
               ))}
             </div>

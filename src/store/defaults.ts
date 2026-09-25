@@ -1,5 +1,5 @@
 import { todayISO } from '../lib/dates';
-import type { CheckoutDraft, NewApptDraft, NewClientDraft, OnboardingBiz } from './types';
+import type { CheckoutDraft, NewApptDraft, NewClientDraft, OnboardingBiz, RecordPaymentDraft } from './types';
 
 export function defaultOnboardingBiz(): OnboardingBiz {
   return {
@@ -40,9 +40,9 @@ export function defaultNewApptDraft(): NewApptDraft {
 }
 
 export function defaultCheckoutDraft(): CheckoutDraft {
-  return { tip: 0, payMethod: 'Card', productSelections: {} };
+  return { tip: 0, payMethod: 'Card', productSelections: {}, giftCardId: '' };
 }
 
-export function defaultRecordPaymentDraft() {
-  return { clientId: '', apptId: '', amount: 0, method: 'Card' as const, type: 'full' as const, note: '' };
+export function defaultRecordPaymentDraft(): RecordPaymentDraft {
+  return { clientId: '', apptId: '', amount: 0, method: 'Card', type: 'full', note: '', giftCardId: '' };
 }

@@ -23,7 +23,8 @@ import { formatHoursLabel, parseHoursText } from './hours';
  */
 
 export const BACKUP_APP_ID = 'lumora-salon-os';
-export const BACKUP_SCHEMA_VERSION = 2;
+// 3: gift card redemptions, store credit, deposit outcomes, points history, per-service rebook cycles.
+export const BACKUP_SCHEMA_VERSION = 3;
 
 export interface BackupFile {
   app: typeof BACKUP_APP_ID;
@@ -135,6 +136,7 @@ function normService(v: unknown): Service | null {
     overhead: nonNeg(v.overhead),
     active: bool(v.active, true),
     targetMargin: Math.min(0.95, Math.max(0, num(v.targetMargin, 0.35))),
+    ...(num(v.rebookWeeks, 0) >= 1 ? { rebookWeeks: Math.min(52, Math.round(num(v.rebookWeeks))) } : {}),
   };
 }
 
@@ -186,6 +188,14 @@ function normClient(v: unknown): Client | null {
     status: v.status === 'lead' || v.status === 'inactive' ? v.status : 'active',
     ...(typeof v.referredBy === 'string' ? { referredBy: v.referredBy } : {}),
     ...(v.archived === true ? { archived: true } : {}),
+    ...(Array.isArray(v.pointsLog)
+      ? {
+          pointsLog: v.pointsLog
+            .filter(isObj)
+            .filter((e) => idOk(e.id) && Number.isFinite(num(e.delta, NaN)))
+            .map((e) => ({ id: e.id as string, date: dateOr(e.date, TODAY()), delta: Math.round(num(e.delta)), reason: str(e.reason), ...(idOk(e.apptId) ? { apptId: e.apptId } : {}) })),
+        }
+      : {}),
   };
 }
 
@@ -220,6 +230,7 @@ function normAppointment(v: unknown): Appointment | null {
       .filter((l) => idOk(l.itemId) && nonNeg(l.qty) > 0)
       .map((l) => ({ itemId: l.itemId as string, qty: nonNeg(l.qty), price: nonNeg(l.price), ...(typeof l.name === 'string' ? { name: l.name } : {}) })),
     ...(typeof v.cancelReason === 'string' ? { cancelReason: v.cancelReason } : {}),
+    ...(v.depositOutcome === 'kept' || v.depositOutcome === 'refunded' || v.depositOutcome === 'credit' ? { depositOutcome: v.depositOutcome } : {}),
   };
 }
 
@@ -255,12 +266,14 @@ function normPayment(v: unknown): Payment | null {
     clientId: v.clientId,
     apptId: idOk(v.apptId) ? v.apptId : null,
     amount,
-    method: v.method === 'Cash' ? 'Cash' : 'Card',
+    method: v.method === 'Cash' ? 'Cash' : v.method === 'Gift card' ? 'Gift card' : 'Card',
     type: PAYMENT_TYPES.includes(v.type as Payment['type']) ? (v.type as Payment['type']) : 'full',
     date: dateOr(v.date, TODAY()),
     ...(typeof v.note === 'string' && v.note ? { note: v.note } : {}),
     ...(nonNeg(v.tip) > 0 ? { tip: Math.min(amount, nonNeg(v.tip)) } : {}),
     ...(v.voided === true ? { voided: true, voidedAt: dateOr(v.voidedAt, TODAY()) } : {}),
+    ...(typeof v.createdAt === 'string' && !Number.isNaN(Date.parse(v.createdAt)) ? { createdAt: v.createdAt } : {}),
+    ...(idOk(v.giftCardId) ? { giftCardId: v.giftCardId } : {}),
   };
 }
 
@@ -285,7 +298,20 @@ function normContent(v: unknown): ContentItem | null {
 
 function normGiftCard(v: unknown): GiftCard | null {
   if (!isObj(v) || !idOk(v.id)) return null;
-  return { id: v.id, code: str(v.code), initialValue: nonNeg(v.initialValue), balance: nonNeg(v.balance), purchasedBy: str(v.purchasedBy), issuedDate: dateOr(v.issuedDate, TODAY()) };
+  const initialValue = nonNeg(v.initialValue);
+  const voided = v.voided === true;
+  return {
+    id: v.id,
+    code: str(v.code).trim() || `LUM-${v.id.slice(-4).toUpperCase()}`,
+    initialValue,
+    balance: voided ? 0 : nonNeg(v.balance),
+    purchasedBy: str(v.purchasedBy),
+    issuedDate: dateOr(v.issuedDate, TODAY()),
+    ...(v.kind === 'credit' ? { kind: 'credit' as const } : { kind: 'gift' as const }),
+    ...(idOk(v.clientId) ? { clientId: v.clientId } : {}),
+    ...(voided ? { voided: true } : {}),
+    ...(idOk(v.sourceApptId) ? { sourceApptId: v.sourceApptId } : {}),
+  };
 }
 
 function normReward(v: unknown): LoyaltyReward | null {

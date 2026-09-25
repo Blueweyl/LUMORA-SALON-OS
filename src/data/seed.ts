@@ -439,8 +439,8 @@ export function seedContent(): ContentItem[] {
 
 export function seedGiftCards(): GiftCard[] {
   return [
-    { id: makeId('gc'), code: 'LUM-8341', initialValue: 100, balance: 45, purchasedBy: 'Sarah Mitchell', issuedDate: isoDaysAgo(60) },
-    { id: makeId('gc'), code: 'LUM-2290', initialValue: 50, balance: 50, purchasedBy: 'Lauren Wallace', issuedDate: isoDaysAgo(10) },
+    { id: makeId('gc'), code: 'LUM-8341', initialValue: 100, balance: 45, purchasedBy: 'Sarah Mitchell', issuedDate: isoDaysAgo(60), kind: 'gift' },
+    { id: makeId('gc'), code: 'LUM-2290', initialValue: 50, balance: 50, purchasedBy: 'Lauren Wallace', issuedDate: isoDaysAgo(10), kind: 'gift' },
   ];
 }
 

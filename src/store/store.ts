@@ -6,7 +6,8 @@ import { pointsForSpend, tierForPoints } from '../lib/loyalty';
 import { formatHoursLabel, nextOpenDay } from '../lib/hours';
 import { checkBooking } from '../lib/scheduling';
 import { canSaveDraft, evaluateDraft } from '../lib/booking';
-import { apptBill, apptOutstanding, apptPaid, activeStaff, getNextApptForClient, inventoryUsage, lastCompletedAppt } from '../lib/selectors';
+import { apptBill, apptPaid, apptPaymentCap, activeStaff, clientName, getNextApptForClient, inventoryUsage, lastCompletedAppt, rebookWeeksFor } from '../lib/selectors';
+import { OPEN_STATUSES, findDuplicatePayment, isUntouchedCard, isUsableCard, newCardCode, withPoints } from '../lib/finance';
 import { backupFileName, buildBackup, parseBackup, repairDomain } from '../lib/backup';
 import { STORAGE_KEY, flushStorage, markHydrated, persistStorage, readRecoverySnapshot, saveRecoverySnapshot, useStorageStatus } from '../lib/storage';
 import {
@@ -25,8 +26,8 @@ import {
   seedWaitlist,
 } from '../data/seed';
 import { defaultCheckoutDraft, defaultNewApptDraft, defaultNewClientDraft, defaultOnboardingBiz, defaultRecordPaymentDraft } from './defaults';
-import type { AppState, Domain, ServiceDraftRow } from './types';
-import type { Client, ClientNote, ClientPhoto, Service, StaffMember, InventoryItem, Expense, Appointment, AppointmentStatus, Payment, ContentItem, ContentStage } from '../types';
+import type { AppState, ConfirmChoice, Domain, ServiceDraftRow } from './types';
+import type { Client, ClientNote, ClientPhoto, Service, StaffMember, InventoryItem, Expense, Appointment, AppointmentStatus, Payment, ContentItem, ContentStage, DepositOutcome, GiftCard } from '../types';
 
 function buildDomain(): Domain {
   const appointments = seedAppointments();
@@ -120,10 +121,42 @@ const nonNeg = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
 const STAFF_COLORS = ['#7a2f57', '#3f6e63', '#8a6a2f', '#42527a'];
 const initialsOf = (name: string) => name.split(' ').filter(Boolean).map((p) => p[0]).slice(0, 2).join('').toUpperCase() || '?';
 const digits = (v: string) => v.replace(/\D/g, '');
+/** Same phone number regardless of formatting or a leading country code. */
+const samePhone = (a: string, b: string) => {
+  const x = digits(a);
+  const y = digits(b);
+  if (x.length < 7 || y.length < 7) return false;
+  return x.length >= 10 && y.length >= 10 ? x.slice(-10) === y.slice(-10) : x === y;
+};
+
+/** Puts gift-card/credit money from these (now voided) payments back on the cards they came from. */
+function restoreCards(cards: GiftCard[], voided: Payment[]): GiftCard[] {
+  const back = new Map<string, number>();
+  voided.forEach((p) => {
+    if (p.method === 'Gift card' && p.giftCardId) back.set(p.giftCardId, (back.get(p.giftCardId) || 0) + p.amount);
+  });
+  if (back.size === 0) return cards;
+  return cards.map((c) => (back.has(c.id) ? { ...c, balance: round2(Math.min(c.initialValue, c.balance + (back.get(c.id) || 0))) } : c));
+}
+
+/** Paid/settled flags always follow the payments that are still valid. */
+function syncApptFlags(appointments: Appointment[], payments: Payment[], apptIds: (string | null | undefined)[]): Appointment[] {
+  const ids = new Set(apptIds.filter(Boolean) as string[]);
+  if (ids.size === 0) return appointments;
+  return appointments.map((a) => {
+    if (!ids.has(a.id)) return a;
+    const paid = apptPaid({ payments }, a.id);
+    const balancePaid = a.status === 'completed' && paid >= apptBill(a) - 0.005;
+    const depositPaid = paid > 0.004;
+    return balancePaid === a.balancePaid && depositPaid === a.depositPaid ? a : { ...a, balancePaid, depositPaid };
+  });
+}
 
 export interface Actions {
   toast: (msg: string) => void;
   askConfirm: (title: string, message: string, onConfirm: () => void, confirmLabel?: string, cancelLabel?: string, destructive?: boolean) => void;
+  askChoice: (title: string, message: string, choices: ConfirmChoice[], initial: string, onConfirm: (choice: string) => void, confirmLabel?: string, destructive?: boolean) => void;
+  setConfirmChoice: (v: string) => void;
   closeConfirm: () => void;
   runConfirm: () => void;
 
@@ -172,6 +205,7 @@ export interface Actions {
   closeClientProfile: () => void;
   setClientTab: (tab: AppState['clientTab']) => void;
   updateClientField: (clientId: string, field: 'name' | 'phone' | 'email' | 'birthday', value: string) => void;
+  saveClientContact: (clientId: string, form: { name: string; phone: string; email: string; birthday: string }, onSaved: () => void, force?: boolean) => void;
   addClientNote: (clientId: string, text: string) => void;
   addClientPhoto: (clientId: string, label: string, kind: 'before' | 'after') => void;
   updateBeautyProfileField: (clientId: string, field: keyof Client['beautyProfile'], value: string) => void;
@@ -198,6 +232,7 @@ export interface Actions {
   apptAction: (id: string, action: 'confirm' | 'checkin' | 'start' | 'cancel' | 'noshow') => void;
   updateCheckoutTip: (v: number) => void;
   setCheckoutPayMethod: (v: 'Card' | 'Cash') => void;
+  setCheckoutGiftCard: (id: string) => void;
   setCheckoutProductQty: (itemId: string, qty: number) => void;
   completeCheckout: () => void;
   closeCompleteScreen: () => void;
@@ -230,10 +265,11 @@ export interface Actions {
 
   recordPayment: (p: Omit<Payment, 'id' | 'date'>) => void;
   voidPayment: (id: string) => void;
-  openRecordPayment: (clientId?: string, apptId?: string) => void;
+  openRecordPayment: (clientId?: string, apptId?: string, type?: AppState['recordPaymentDraft']['type']) => void;
+  voidGiftCard: (cardId: string) => void;
   closeRecordPayment: () => void;
   updateRecordPaymentField: <K extends keyof AppState['recordPaymentDraft']>(field: K, value: AppState['recordPaymentDraft'][K]) => void;
-  saveRecordPayment: () => void;
+  saveRecordPayment: (force?: boolean) => void;
 
   setGrowTab: (t: AppState['growTab']) => void;
   redeemReward: (clientId: string, rewardId: string) => void;
@@ -282,11 +318,16 @@ export const useStore = create<AppState & Actions>()(
         },
         askConfirm: (title, message, onConfirm, confirmLabel, cancelLabel, destructive) =>
           set({ confirmDialog: { title, message, onConfirm, confirmLabel: confirmLabel || 'Confirm', cancelLabel: cancelLabel || 'Cancel', destructive } }),
+        askChoice: (title, message, choices, initial, onConfirm, confirmLabel, destructive) =>
+          set({ confirmDialog: { title, message, onConfirm: () => {}, onConfirmChoice: onConfirm, choices, choice: initial, confirmLabel: confirmLabel || 'Confirm', cancelLabel: 'Go Back', destructive } }),
+        setConfirmChoice: (v) => set((s) => (s.confirmDialog ? { confirmDialog: { ...s.confirmDialog, choice: v } } : {})),
         closeConfirm: () => set({ confirmDialog: null }),
         runConfirm: () => {
-          const cb = get().confirmDialog?.onConfirm;
+          const d = get().confirmDialog;
+          if (!d) return; // already handled (double click)
           set({ confirmDialog: null });
-          cb?.();
+          if (d.onConfirmChoice) d.onConfirmChoice(d.choice || '');
+          else d.onConfirm();
         },
 
         setSection: (s) => set({ section: s, selectedClientId: null, showSidebarMobile: false }),
@@ -476,12 +517,11 @@ export const useStore = create<AppState & Actions>()(
             return;
           }
           if (!force) {
-            const phone = digits(d.phone);
-            const dup = get().clients.find((c) => (phone.length >= 7 && digits(c.phone) === phone) || (email && c.email.toLowerCase() === email.toLowerCase()) || c.name.toLowerCase() === name.toLowerCase());
+            const dup = get().clients.find((c) => samePhone(c.phone, d.phone) || (email && c.email.trim().toLowerCase() === email.toLowerCase()) || c.name.trim().toLowerCase() === name.toLowerCase());
             if (dup) {
               get().askConfirm(
                 'This client may already exist',
-                `${dup.name}${dup.archived ? ' (archived)' : ''} has the same ${dup.name.toLowerCase() === name.toLowerCase() ? 'name' : phone && digits(dup.phone) === phone ? 'phone number' : 'email'}. Add a new client anyway?`,
+                `${dup.name}${dup.archived ? ' (archived)' : ''} has the same ${samePhone(dup.phone, d.phone) ? 'phone number' : email && dup.email.trim().toLowerCase() === email.toLowerCase() ? 'email' : 'name'}. Add a new client anyway?`,
                 () => get().saveNewClient(true),
                 'Add Anyway',
                 'Go Back',
@@ -529,6 +569,28 @@ export const useStore = create<AppState & Actions>()(
         closeClientProfile: () => set({ selectedClientId: null }),
         setClientTab: (tab) => set({ clientTab: tab }),
         updateClientField: (clientId, field, value) => set((s) => ({ clients: s.clients.map((c) => (c.id === clientId ? { ...c, [field]: value } : c)) })),
+        saveClientContact: (clientId, form, onSaved, force) => {
+          const name = form.name.trim();
+          const email = form.email.trim();
+          if (!name) return get().toast('Name can’t be empty');
+          if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return get().toast('That email address doesn’t look right');
+          if (!force) {
+            const dup = get().clients.find((c) => c.id !== clientId && (samePhone(c.phone, form.phone) || (email && c.email.trim().toLowerCase() === email.toLowerCase())));
+            if (dup) {
+              get().askConfirm(
+                'Another client has these details',
+                `${dup.name}${dup.archived ? ' (archived)' : ''} already uses this ${samePhone(dup.phone, form.phone) ? 'phone number' : 'email'}. Save anyway, or cancel and check whether they're the same person.`,
+                () => get().saveClientContact(clientId, form, onSaved, true),
+                'Save Anyway',
+                'Cancel',
+              );
+              return;
+            }
+          }
+          set((s) => ({ clients: s.clients.map((c) => (c.id === clientId ? { ...c, name, phone: form.phone.trim(), email, birthday: form.birthday } : c)) }));
+          get().toast('Client details saved');
+          onSaved();
+        },
         addClientNote: (clientId, text) => {
           if (!text.trim()) {
             get().toast('Type a note first');
@@ -728,27 +790,79 @@ export const useStore = create<AppState & Actions>()(
             get().toast('A no-show can only be marked on or after the appointment day');
             return;
           }
-          if (action === 'cancel') {
-            get().askConfirm('Cancel this appointment?', `The client will need to be notified separately. This frees up the time slot.${appt.deposit > 0 && appt.depositPaid ? ' The deposit stays recorded — void it in Money → Payments if you refund it.' : ''}`, () => {
-              set((s) => ({
-                appointments: s.appointments.map((a) => (a.id === id ? { ...a, status: 'cancelled' as AppointmentStatus } : a)),
-                clients: s.clients.map((c) => (c.id === appt.clientId ? { ...c, cancellationCount: c.cancellationCount + 1 } : c)),
+          if (action === 'cancel' || action === 'noshow') {
+            const status: AppointmentStatus = action === 'cancel' ? 'cancelled' : 'no-show';
+            const held = apptPaid(get(), id);
+            const close = (outcome?: DepositOutcome) => {
+              const st = get();
+              const cur = st.appointments.find((a) => a.id === id);
+              if (!cur || !OPEN_STATUSES.includes(cur.status)) return; // closed meanwhile (double click)
+              const linked = st.payments.filter((p) => p.apptId === id && !p.voided);
+              let payments = st.payments;
+              let giftCards = st.giftCards;
+              if (outcome === 'refunded') {
+                const ids = new Set(linked.map((p) => p.id));
+                payments = payments.map((p) => (ids.has(p.id) ? { ...p, voided: true, voidedAt: todayISO(), note: [p.note, `Refunded — appointment ${action === 'cancel' ? 'cancelled' : 'no-show'}`].filter(Boolean).join(' · ') } : p));
+                // Money paid from a gift card goes back onto that card.
+                giftCards = restoreCards(giftCards, linked);
+              } else if (outcome === 'credit') {
+                // Anything paid from a gift card goes straight back onto that card; only new money becomes store credit.
+                const fromCards = linked.filter((p) => p.method === 'Gift card');
+                if (fromCards.length) {
+                  const ids = new Set(fromCards.map((p) => p.id));
+                  payments = payments.map((p) => (ids.has(p.id) ? { ...p, voided: true, voidedAt: todayISO(), note: [p.note, 'Returned to card — appointment cancelled'].filter(Boolean).join(' · ') } : p));
+                  giftCards = restoreCards(giftCards, fromCards);
+                }
+                const creditAmt = round2(linked.filter((p) => p.method !== 'Gift card').reduce((n, p) => n + p.amount - (p.tip || 0), 0));
+                if (creditAmt > 0) {
+                  giftCards = [{ id: makeId('gc'), code: newCardCode(giftCards, 'CR'), initialValue: creditAmt, balance: creditAmt, purchasedBy: clientName(st, cur.clientId), issuedDate: todayISO(), kind: 'credit', clientId: cur.clientId, sourceApptId: id }, ...giftCards];
+                }
+              }
+              set((x) => ({
+                payments,
+                giftCards,
+                appointments: x.appointments.map((a) => (a.id === id ? { ...a, status, ...(outcome ? { depositOutcome: outcome, depositPaid: outcome !== 'refunded' } : {}) } : a)),
+                clients: x.clients.map((c) => (c.id === cur.clientId ? (action === 'cancel' ? { ...c, cancellationCount: c.cancellationCount + 1 } : { ...c, noShowCount: c.noShowCount + 1 }) : c)),
                 apptDetailId: null,
-                cancellationRescueApptId: id,
+                ...(action === 'cancel' ? { cancellationRescueApptId: id } : {}),
               }));
-              get().toast('Appointment cancelled');
-            }, 'Cancel Appointment', 'Keep Appointment', true);
-            return;
-          }
-          if (action === 'noshow') {
-            get().askConfirm('Mark as no-show?', 'This closes the appointment and adds a no-show to the client’s record.', () => {
-              set((s) => ({
-                appointments: s.appointments.map((a) => (a.id === id ? { ...a, status: 'no-show' as AppointmentStatus } : a)),
-                clients: s.clients.map((c) => (c.id === appt.clientId ? { ...c, noShowCount: c.noShowCount + 1 } : c)),
-                apptDetailId: null,
-              }));
-              get().toast('Marked as no-show');
-            }, 'Mark No-Show', 'Cancel', true);
+              const money = `${st.business.currencySymbol}${held.toFixed(2)}`;
+              const what = action === 'cancel' ? 'Appointment cancelled' : 'Marked as no-show';
+              const newCredit = giftCards.find((g) => g.sourceApptId === id && g.kind === 'credit' && !st.giftCards.includes(g));
+              get().toast(
+                !outcome
+                  ? what
+                  : outcome === 'kept'
+                    ? `${what} · ${money} deposit kept as a fee`
+                    : outcome === 'refunded'
+                      ? `${what} · ${money} deposit refunded (voided)`
+                      : newCredit
+                        ? `${what} · ${st.business.currencySymbol}${newCredit.initialValue.toFixed(2)} added to store credit`
+                        : `${what} · deposit returned to the gift card it was paid from`,
+              );
+            };
+            if (held <= 0) {
+              if (action === 'cancel') get().askConfirm('Cancel this appointment?', 'The client will need to be notified separately. This frees up the time slot.', () => close(), 'Cancel Appointment', 'Keep Appointment', true);
+              else get().askConfirm('Mark as no-show?', 'This closes the appointment and adds a no-show to the client’s record.', () => close(), 'Mark No-Show', 'Cancel', true);
+              return;
+            }
+            // A deposit was paid: the owner decides, once, what happens to that money.
+            const cur = get().business.currencySymbol;
+            const hoursAway = (new Date(`${appt.date}T${appt.time}:00`).getTime() - Date.now()) / 3600000;
+            const late = action === 'noshow' || hoursAway < get().business.cancellationWindowHrs;
+            get().askChoice(
+              action === 'cancel' ? 'Cancel this appointment?' : 'Mark as no-show?',
+              `${clientName(get(), appt.clientId).split(' ')[0]} paid a ${cur}${held.toFixed(2)} deposit. What should happen to it?${action === 'cancel' && late ? ` This is inside your ${get().business.cancellationWindowHrs}h cancellation window.` : ''}`,
+              [
+                { value: 'kept', label: 'Keep it as a cancellation fee', hint: 'Stays in your revenue.' },
+                { value: 'credit', label: 'Move it to store credit', hint: 'The client can use it at a future checkout.' },
+                { value: 'refunded', label: 'Refund it', hint: 'Voids the deposit payment — give the money back yourself.' },
+              ],
+              late ? 'kept' : 'credit',
+              (choice) => close(choice as DepositOutcome),
+              action === 'cancel' ? 'Cancel Appointment' : 'Mark No-Show',
+              true,
+            );
             return;
           }
           const map = { confirm: 'confirmed', checkin: 'checked-in', start: 'in-service' } as const;
@@ -757,6 +871,7 @@ export const useStore = create<AppState & Actions>()(
         },
         updateCheckoutTip: (v) => set((s) => ({ checkoutDraft: { ...s.checkoutDraft, tip: round2(nonNeg(v)) } })),
         setCheckoutPayMethod: (v) => set((s) => ({ checkoutDraft: { ...s.checkoutDraft, payMethod: v } })),
+        setCheckoutGiftCard: (id) => set((s) => ({ checkoutDraft: { ...s.checkoutDraft, giftCardId: id } })),
         setCheckoutProductQty: (itemId, qty) => {
           const item = get().inventory.find((i) => i.id === itemId);
           if (!item) return;
@@ -802,29 +917,61 @@ export const useStore = create<AppState & Actions>()(
           const alreadyPaid = apptPaid(s, appt.id);
           const due = round2(Math.max(0, bill - alreadyPaid));
           const tip = s.checkoutDraft.tip;
-          const chargeNow = round2(due + tip);
+          const payType = alreadyPaid > 0 ? 'balance' : 'full';
+          const createdAt = new Date().toISOString();
           const payments = [...s.payments];
+          let giftCards = s.giftCards;
+
+          // Gift card / store credit is applied first (never more than its balance or the bill); the rest + tip is charged normally.
+          let fromCard = 0;
+          if (s.checkoutDraft.giftCardId) {
+            const card = s.giftCards.find((c) => c.id === s.checkoutDraft.giftCardId);
+            if (!isUsableCard(card)) {
+              get().toast('That gift card has no balance left — choose another way to pay');
+              return;
+            }
+            fromCard = round2(Math.min(card.balance, due));
+            if (fromCard > 0) {
+              payments.push({ id: makeId('pay'), clientId: appt.clientId, apptId: appt.id, amount: fromCard, method: 'Gift card', type: payType, date: todayISO(), createdAt, giftCardId: card.id, note: `${card.kind === 'credit' ? 'Store credit' : 'Gift card'} ${card.code}` });
+              giftCards = giftCards.map((c) => (c.id === card.id ? { ...c, balance: round2(c.balance - fromCard) } : c));
+            }
+          }
+          const chargeNow = round2(due - fromCard + tip);
           if (chargeNow > 0) {
-            payments.push({ id: makeId('pay'), clientId: appt.clientId, apptId: appt.id, amount: chargeNow, method: s.checkoutDraft.payMethod, type: alreadyPaid > 0 ? 'balance' : 'full', date: todayISO(), ...(tip > 0 ? { tip } : {}) });
+            payments.push({ id: makeId('pay'), clientId: appt.clientId, apptId: appt.id, amount: chargeNow, method: s.checkoutDraft.payMethod, type: payType, date: todayISO(), createdAt, ...(tip > 0 ? { tip } : {}) });
           }
 
+          // Paid more up front than the final bill (e.g. services changed after the deposit): the difference becomes store credit, never lost.
+          const overpaid = round2(alreadyPaid - bill);
+          if (overpaid > 0.004) {
+            giftCards = [{ id: makeId('gc'), code: newCardCode(giftCards, 'CR'), initialValue: overpaid, balance: overpaid, purchasedBy: clientName(s, appt.clientId), issuedDate: todayISO(), kind: 'credit', clientId: appt.clientId, sourceApptId: appt.id }, ...giftCards];
+          }
+
+          const earned = pointsForSpend(bill);
           const clients = s.clients.map((c) => {
             if (c.id !== appt.clientId) return c;
-            const newPoints = c.loyaltyPoints + pointsForSpend(bill);
+            const next = withPoints(c, earned, `Visit ${appt.date} · ${s.business.currencySymbol}${bill.toFixed(2)} spent`, appt.id);
+            // Redeeming points never demotes a client: the tier only moves up.
+            const tier = tierForPoints(next.loyaltyPoints);
+            const rank = ['none', 'silver', 'gold', 'platinum'];
             return {
-              ...c,
+              ...next,
               lifetimeSpend: round2(c.lifetimeSpend + bill),
               visits: c.visits + 1,
               lastVisit: !c.lastVisit || appt.date > c.lastVisit ? appt.date : c.lastVisit,
-              loyaltyPoints: newPoints,
-              vipTier: tierForPoints(newPoints),
+              vipTier: rank.indexOf(tier) > rank.indexOf(c.vipTier) ? tier : c.vipTier,
             };
           });
 
-          const appointments = s.appointments.map((a) => (a.id === appt.id ? { ...completedAppt, balancePaid: true } : a));
+          const appointments = syncApptFlags(
+            s.appointments.map((a) => (a.id === appt.id ? completedAppt : a)),
+            payments,
+            [appt.id],
+          );
 
-          set({ appointments, inventory, payments, clients, apptDetailId: null, justCompletedApptId: appt.id, checkoutDraft: defaultCheckoutDraft() });
-          get().toast(shortages.length ? `Checkout complete · check stock: ${shortages.slice(0, 2).join(', ')}` : 'Checkout complete');
+          set({ appointments, inventory, payments, giftCards, clients, apptDetailId: null, justCompletedApptId: appt.id, checkoutDraft: defaultCheckoutDraft() });
+          const notes = [shortages.length ? `check stock: ${shortages.slice(0, 2).join(', ')}` : '', overpaid > 0.004 ? `${s.business.currencySymbol}${overpaid.toFixed(2)} overpaid → store credit` : ''].filter(Boolean);
+          get().toast(`Checkout complete${notes.length ? ` · ${notes.join(' · ')}` : ''}`);
         },
         closeCompleteScreen: () => set({ justCompletedApptId: null }),
         rebookClient: (clientId, apptId) => {
@@ -832,7 +979,8 @@ export const useStore = create<AppState & Actions>()(
           const upcoming = getNextApptForClient(s, clientId);
           const prevAppt = apptId ? s.appointments.find((a) => a.id === apptId) : lastCompletedAppt(s, clientId);
           const from = prevAppt && prevAppt.date > todayISO() ? prevAppt.date : todayISO();
-          const target = nextOpenDay(s.business, toISODate(addDays(from, s.business.rebookWeeks * 7)));
+          const weeks = prevAppt ? rebookWeeksFor(s, prevAppt.serviceIds) : s.business.rebookWeeks;
+          const target = nextOpenDay(s.business, toISODate(addDays(from, weeks * 7)));
           set({ justCompletedApptId: null, section: 'bookings', selectedClientId: null });
           get().openNewAppt({
             clientId,
@@ -887,6 +1035,12 @@ export const useStore = create<AppState & Actions>()(
           set((s) => ({
             services: s.services.map((sv) => {
               if (sv.id !== id) return sv;
+              if (field === 'rebookWeeks') {
+                const w = Math.round(nonNeg(Number(value)));
+                const rest = { ...sv };
+                delete rest.rebookWeeks;
+                return w >= 1 ? { ...rest, rebookWeeks: Math.min(52, w) } : rest;
+              }
               let v = value;
               if (typeof value === 'number') v = field === 'duration' ? Math.max(5, Math.round(nonNeg(value))) : field === 'targetMargin' ? Math.min(0.95, nonNeg(value)) : nonNeg(value);
               return { ...sv, [field]: v };
@@ -990,47 +1144,192 @@ export const useStore = create<AppState & Actions>()(
         /* ---------------- payments ---------------- */
 
         recordPayment: (p) => {
-          set((s) => ({ payments: [{ ...p, amount: round2(p.amount), id: makeId('pay'), date: todayISO() }, ...s.payments] }));
+          set((s) => ({ payments: [{ ...p, amount: round2(p.amount), id: makeId('pay'), date: todayISO(), createdAt: new Date().toISOString() }, ...s.payments] }));
           get().toast('Payment recorded');
         },
         voidPayment: (id) => {
-          const p = get().payments.find((x) => x.id === id);
+          const s = get();
+          const p = s.payments.find((x) => x.id === id);
           if (!p || p.voided) return;
-          get().askConfirm('Void this payment?', `${get().business.currencySymbol}${p.amount.toFixed(2)} will be removed from revenue. It stays visible (struck through) for your records.${p.apptId ? ' If it paid for a visit, that balance becomes outstanding again.' : ''}`, () => {
-            set((s) => ({
-              payments: s.payments.map((x) => (x.id === id ? { ...x, voided: true, voidedAt: todayISO() } : x)),
-              appointments: p.apptId ? s.appointments.map((a) => (a.id === p.apptId ? { ...a, balancePaid: false } : a)) : s.appointments,
-            }));
-            get().toast('Payment voided');
+          const cur = s.business.currencySymbol;
+          // A gift card sale is undone by voiding the card itself (only while nothing has been spent from it).
+          if (p.type === 'gift-card' && p.giftCardId) {
+            get().voidGiftCard(p.giftCardId);
+            return;
+          }
+          const appt = p.apptId ? s.appointments.find((a) => a.id === p.apptId) : undefined;
+          if (appt?.depositOutcome === 'credit') {
+            const credit = s.giftCards.find((c) => c.sourceApptId === appt.id && c.kind === 'credit' && !c.voided);
+            if (credit) {
+              get().toast(`This deposit became store credit ${credit.code}. Refund it from Money → Payments → Gift Cards & Credit.`);
+              return;
+            }
+          }
+          const fromCard = p.method === 'Gift card';
+          const detail = fromCard
+            ? `${cur}${p.amount.toFixed(2)} goes back onto the gift card / credit it was paid from.`
+            : `${cur}${p.amount.toFixed(2)} will be removed from revenue.`;
+          get().askConfirm('Void this payment?', `${detail} It stays visible (struck through) for your records.${p.apptId ? ' If it paid for a visit, that amount becomes owed again.' : ''}`, () => {
+            const now = get().payments.find((x) => x.id === id);
+            if (!now || now.voided) return;
+            set((x) => {
+              const payments = x.payments.map((y) => (y.id === id ? { ...y, voided: true, voidedAt: todayISO() } : y));
+              return {
+                payments,
+                giftCards: restoreCards(x.giftCards, [now]),
+                appointments: syncApptFlags(x.appointments, payments, [now.apptId]),
+              };
+            });
+            get().toast(fromCard ? 'Payment voided · balance returned to the card' : 'Payment voided');
           }, 'Void Payment', 'Cancel', true);
         },
-        openRecordPayment: (clientId, apptId) => {
+        voidGiftCard: (cardId) => {
+          const s = get();
+          const card = s.giftCards.find((c) => c.id === cardId);
+          if (!card || card.voided) return;
+          const cur = s.business.currencySymbol;
+          if (!isUntouchedCard(card)) {
+            get().toast(`${card.code} has already been used (${cur}${(card.initialValue - card.balance).toFixed(2)} spent), so it can't be voided. Void the payments made with it first.`);
+            return;
+          }
+          const sale = s.payments.filter((p) => !p.voided && p.type === 'gift-card' && p.giftCardId === cardId);
+          const deposits = card.kind === 'credit' && card.sourceApptId ? s.payments.filter((p) => !p.voided && p.apptId === card.sourceApptId && p.method !== 'Gift card') : [];
+          const isDepositCredit = deposits.length > 0;
+          const title = card.kind === 'credit' ? 'Refund this store credit?' : 'Void this gift card?';
+          const msg = card.kind === 'credit'
+            ? `${cur}${card.balance.toFixed(2)} of store credit (${card.code}) will be removed${isDepositCredit ? ' and the deposit it came from marked as refunded' : ''}. Give the money back to the client yourself.`
+            : `${card.code} (${cur}${card.initialValue.toFixed(2)}) will be cancelled${sale.length ? ' and its sale removed from revenue' : ''}. Give the money back to the buyer yourself.`;
+          get().askConfirm(title, msg, () => {
+            const voidIds = new Set([...sale, ...(isDepositCredit ? deposits : [])].map((p) => p.id));
+            set((x) => {
+              const payments = x.payments.map((p) => (voidIds.has(p.id) ? { ...p, voided: true, voidedAt: todayISO(), note: [p.note, card.kind === 'credit' ? 'Refunded (store credit)' : 'Gift card voided'].filter(Boolean).join(' · ') } : p));
+              const voidedNow = x.payments.filter((p) => voidIds.has(p.id));
+              return {
+                payments,
+                giftCards: restoreCards(x.giftCards, voidedNow).map((c) => (c.id === cardId ? { ...c, voided: true, balance: 0 } : c)),
+                appointments: isDepositCredit
+                  ? x.appointments.map((a) => (a.id === card.sourceApptId ? { ...a, depositOutcome: 'refunded' as DepositOutcome, depositPaid: false } : a))
+                  : x.appointments,
+              };
+            });
+            get().toast(card.kind === 'credit' ? 'Store credit refunded' : 'Gift card voided');
+          }, card.kind === 'credit' ? 'Refund Credit' : 'Void Gift Card', 'Cancel', true);
+        },
+        openRecordPayment: (clientId, apptId, type) => {
           const appt = apptId ? get().appointments.find((a) => a.id === apptId) : undefined;
-          const amount = appt ? apptOutstanding(get(), appt) : 0;
-          set({ showRecordPayment: true, showQuickAdd: false, recordPaymentDraft: { ...defaultRecordPaymentDraft(), clientId: clientId || '', apptId: appt ? appt.id : '', amount, type: appt ? 'balance' : 'full' } });
+          const amount = appt ? apptPaymentCap(get(), appt) : 0;
+          set({
+            showRecordPayment: true,
+            showQuickAdd: false,
+            recordPaymentDraft: { ...defaultRecordPaymentDraft(), clientId: clientId || '', apptId: appt ? appt.id : '', amount, type: type || (appt ? (appt.status === 'completed' ? 'balance' : 'deposit') : 'full') },
+          });
         },
         closeRecordPayment: () => set({ showRecordPayment: false }),
         updateRecordPaymentField: (field, value) =>
           set((s) => {
             const next = { ...s.recordPaymentDraft, [field]: typeof value === 'number' ? round2(nonNeg(value)) : value };
-            if (field === 'clientId') next.apptId = '';
+            if (field === 'clientId') {
+              next.apptId = '';
+              next.giftCardId = '';
+            }
+            if (field === 'apptId') {
+              const a = s.appointments.find((x) => x.id === value);
+              if (a) {
+                next.amount = apptPaymentCap(s, a);
+                next.type = a.status === 'completed' ? 'balance' : 'deposit';
+              } else if (next.type === 'balance' || next.type === 'deposit') next.type = 'full';
+            }
+            if (field === 'type' && value === 'gift-card') {
+              next.apptId = '';
+              if (next.method === 'Gift card') next.method = 'Card';
+            }
+            if (field === 'method' && value !== 'Gift card') next.giftCardId = '';
             return { recordPaymentDraft: next };
           }),
-        saveRecordPayment: () => {
+        saveRecordPayment: (force) => {
           const s = get();
           const d = s.recordPaymentDraft;
-          if (!d.clientId || !(d.amount > 0)) {
+          const cur = s.business.currencySymbol;
+          const amount = round2(d.amount);
+          if (!d.clientId || !(amount > 0)) {
             get().toast('Choose a client and an amount above zero');
             return;
           }
           const appt = d.apptId ? s.appointments.find((a) => a.id === d.apptId && a.clientId === d.clientId) : undefined;
-          get().recordPayment({ clientId: d.clientId, apptId: appt ? appt.id : null, amount: d.amount, method: d.method, type: d.type, note: d.note.trim() || undefined });
-          if (appt) {
-            const st = get();
-            const settled = apptPaid(st, appt.id) >= apptBill(appt) - 0.005;
-            set((x) => ({ appointments: x.appointments.map((a) => (a.id === appt.id ? { ...a, balancePaid: settled } : a)) }));
+          if (d.apptId && !appt) {
+            get().toast('That visit is no longer available — choose it again');
+            return;
           }
-          set({ showRecordPayment: false });
+          if ((d.type === 'balance' || d.type === 'deposit') && !appt) {
+            get().toast(d.type === 'balance' ? 'Choose which unpaid visit this payment is for' : 'Choose which booking this deposit is for');
+            return;
+          }
+          if (appt) {
+            const cap = apptPaymentCap(s, appt);
+            if (cap <= 0) {
+              get().toast('Nothing is owed on that visit');
+              return;
+            }
+            if (amount > cap + 0.005) {
+              get().toast(`That's more than the ${cur}${cap.toFixed(2)} owed for this visit. Record ${cur}${cap.toFixed(2)}, or add extra as a tip at checkout.`);
+              return;
+            }
+          }
+          let card: GiftCard | undefined;
+          if (d.method === 'Gift card') {
+            if (d.type === 'gift-card') {
+              get().toast('A gift card can’t be bought with another gift card');
+              return;
+            }
+            card = s.giftCards.find((c) => c.id === d.giftCardId);
+            if (!isUsableCard(card)) {
+              get().toast('Choose a gift card or credit with a balance');
+              return;
+            }
+            if (amount > card.balance + 0.005) {
+              get().toast(`${card.code} only has ${cur}${card.balance.toFixed(2)} left`);
+              return;
+            }
+          }
+          const type = d.type;
+          const candidate = { clientId: d.clientId, apptId: appt ? appt.id : null, amount, type, method: d.method };
+          const dup = !force && findDuplicatePayment(s.payments, candidate);
+          if (dup) {
+            get().askConfirm(
+              'This looks like a duplicate',
+              `A ${cur}${amount.toFixed(2)} ${d.method.toLowerCase()} payment from ${clientName(s, d.clientId)} was already recorded today${appt ? ' for this visit' : ''}. Record it again?`,
+              () => get().saveRecordPayment(true),
+              'Record Again',
+              'Don’t Record',
+            );
+            return;
+          }
+
+          const createdAt = new Date().toISOString();
+          const payId = makeId('pay');
+          let giftCards = s.giftCards;
+          let soldCode = '';
+          let giftCardId: string | undefined;
+          if (type === 'gift-card') {
+            const newCard: GiftCard = { id: makeId('gc'), code: newCardCode(s.giftCards), initialValue: amount, balance: amount, purchasedBy: clientName(s, d.clientId), issuedDate: todayISO(), kind: 'gift', clientId: d.clientId };
+            giftCards = [newCard, ...giftCards];
+            soldCode = newCard.code;
+            giftCardId = newCard.id;
+          } else if (card) {
+            giftCardId = card.id;
+            giftCards = giftCards.map((c) => (c.id === card.id ? { ...c, balance: round2(c.balance - amount) } : c));
+          }
+          const note = [d.note.trim(), soldCode ? `Gift card ${soldCode}` : card ? `${card.kind === 'credit' ? 'Store credit' : 'Gift card'} ${card.code}` : ''].filter(Boolean).join(' · ');
+          const payment: Payment = { id: payId, clientId: d.clientId, apptId: appt ? appt.id : null, amount, method: d.method, type, date: todayISO(), createdAt, ...(note ? { note } : {}), ...(giftCardId ? { giftCardId } : {}) };
+          set((x) => {
+            const payments = [payment, ...x.payments];
+            return { payments, giftCards, appointments: syncApptFlags(x.appointments, payments, [payment.apptId]), showRecordPayment: false };
+          });
+          if (soldCode) get().toast(`Gift card ${soldCode} sold · ${cur}${amount.toFixed(2)}`);
+          else if (appt) {
+            const left = apptPaymentCap(get(), get().appointments.find((a) => a.id === appt.id) || appt);
+            get().toast(left > 0 ? `Payment recorded · ${cur}${left.toFixed(2)} still owed` : appt.status === 'completed' ? 'Payment recorded · visit paid in full' : 'Payment recorded');
+          } else get().toast('Payment recorded');
         },
 
         /* ---------------- grow ---------------- */
@@ -1047,7 +1346,7 @@ export const useStore = create<AppState & Actions>()(
           }
           set((st) => ({
             clients: st.clients.map((c) =>
-              c.id === clientId ? { ...c, loyaltyPoints: c.loyaltyPoints - reward.pointsCost, notes: [{ id: makeId('note'), date: todayISO(), text: `Redeemed reward: ${reward.label} (−${reward.pointsCost} pts)`, author: 'Lumora' }, ...c.notes] } : c,
+              c.id === clientId ? { ...withPoints(c, -reward.pointsCost, `Redeemed: ${reward.label}`), notes: [{ id: makeId('note'), date: todayISO(), text: `Redeemed reward: ${reward.label} (−${reward.pointsCost} pts)`, author: 'Lumora' }, ...c.notes] } : c,
             ),
           }));
           get().toast(`Redeemed: ${reward.label}`);
