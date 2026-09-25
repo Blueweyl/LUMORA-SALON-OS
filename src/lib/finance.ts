@@ -55,9 +55,16 @@ export function findDuplicatePayment(payments: Payment[], p: Pick<Payment, 'clie
 
 /** Adds (or removes) loyalty points and records why, newest first. */
 export function withPoints(c: Client, delta: number, reason: string, apptId?: string): Client {
-  if (!delta) return c;
-  const entry: PointsEntry = { id: makeId('pt'), date: todayISO(), delta, reason, ...(apptId ? { apptId } : {}) };
-  return { ...c, loyaltyPoints: Math.max(0, c.loyaltyPoints + delta), pointsLog: [entry, ...(c.pointsLog || [])].slice(0, 300) };
+  // Points never go below zero, and the log records the change that was actually applied.
+  const applied = Math.max(-c.loyaltyPoints, Math.round(delta));
+  if (!applied) return c;
+  const entry: PointsEntry = { id: makeId('pt'), date: todayISO(), delta: applied, reason, ...(apptId ? { apptId } : {}) };
+  return { ...c, loyaltyPoints: c.loyaltyPoints + applied, pointsLog: [entry, ...(c.pointsLog || [])].slice(0, 300) };
+}
+
+/** Points a completed visit has earned: one per unit of the bill actually paid (tips excluded). */
+export function visitPoints(bill: number, paid: number): number {
+  return Math.floor(Math.max(0, Math.min(paid, bill)) + 1e-6);
 }
 
 export const OPEN_STATUSES: Appointment['status'][] = ['unconfirmed', 'confirmed', 'checked-in', 'in-service'];

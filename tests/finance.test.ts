@@ -861,6 +861,13 @@ describe('P0 totals always agree', () => {
         S().closeCompleteScreen();
         try {
           assertLedger();
+          // Loyalty follows money: points = Σ paid (≤ bill) over completed visits, and the log adds up.
+          for (const cl of clients) {
+            const now = S().clients.find((x) => x.id === cl.id)!;
+            const expected = S().appointments.filter((y) => y.clientId === cl.id && y.status === 'completed').reduce((n, y) => n + fin.visitPoints(sel.apptBill(y), sel.apptPaid(S(), y.id)), 0);
+            expect(now.loyaltyPoints, `points for ${now.name}`).toBe(expected);
+            expect((now.pointsLog || []).reduce((n, e) => n + e.delta, 0)).toBe(now.loyaltyPoints);
+          }
         } catch (e) {
           if (process.env.FUZZ_DEBUG) console.log(`seed ${seed}\n` + trail.slice(-6).join('\n'));
           throw e;
@@ -977,6 +984,7 @@ describe('P1 loyalty history', () => {
     expect(earned).toBe(508);
     const reward = [...S().loyaltyRewards].sort((x, y) => x.pointsCost - y.pointsCost)[0];
     S().redeemReward(c.id, reward.id);
+    confirm();
     const cl = S().clients.find((x) => x.id === c.id)!;
     expect(cl.pointsLog?.map((e) => e.delta)).toEqual([-reward.pointsCost, earned]);
     expect(cl.pointsLog?.[0].reason).toMatch(/Redeemed/);
@@ -1002,6 +1010,7 @@ describe('P1 loyalty history', () => {
     expect(S().clients.find((x) => x.id === c.id)!.vipTier).toBe('silver');
     const big = [...S().loyaltyRewards].sort((x, y) => x.pointsCost - y.pointsCost)[0];
     S().redeemReward(c.id, big.id);
+    confirm();
     const b2 = book({ clientId: c.id, serviceIds: ['svc_browtint'] });
     checkout(b2.id);
     expect(S().clients.find((x) => x.id === c.id)!.vipTier).toBe('silver');

@@ -6,6 +6,7 @@ export function ConfirmDialog() {
   const runConfirm = useStore((s) => s.runConfirm);
   const closeConfirm = useStore((s) => s.closeConfirm);
   const setChoice = useStore((s) => s.setConfirmChoice);
+  const runAlt = useStore((s) => s.runConfirmAlt);
   if (!dialog) return null;
 
   return (
@@ -42,6 +43,14 @@ export function ConfirmDialog() {
         >
           {dialog.cancelLabel}
         </button>
+        {dialog.altLabel && (
+          <button
+            onClick={runAlt}
+            className="min-h-[44px] rounded-lg border border-plum-600 px-4 py-2.5 text-sm font-bold text-plum-600 hover:bg-plum-50"
+          >
+            {dialog.altLabel}
+          </button>
+        )}
         <button
           onClick={runConfirm}
           autoFocus={!dialog.destructive}

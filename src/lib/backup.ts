@@ -304,7 +304,7 @@ function normGiftCard(v: unknown): GiftCard | null {
     id: v.id,
     code: str(v.code).trim() || `LUM-${v.id.slice(-4).toUpperCase()}`,
     initialValue,
-    balance: voided ? 0 : nonNeg(v.balance),
+    balance: voided ? 0 : Math.min(initialValue, nonNeg(v.balance)),
     purchasedBy: str(v.purchasedBy),
     issuedDate: dateOr(v.issuedDate, TODAY()),
     ...(v.kind === 'credit' ? { kind: 'credit' as const } : { kind: 'gift' as const }),
@@ -345,6 +345,21 @@ function collect<T extends { id: string }>(label: string, raw: unknown, norm: (v
   return out;
 }
 
+/** Paid/settled flags are derived from payments; stored flags can be stale, so they are rebuilt whenever data is loaded. */
+export function rebuildPaidFlags(appointments: Appointment[], payments: Payment[]): Appointment[] {
+  const paid = new Map<string, number>();
+  payments.forEach((p) => {
+    if (!p.voided && p.apptId) paid.set(p.apptId, (paid.get(p.apptId) || 0) + p.amount - (p.tip || 0));
+  });
+  return appointments.map((a) => {
+    const got = paid.get(a.id) || 0;
+    const bill = Math.max(0, a.price - a.discount) + a.productsSold.reduce((n, l) => n + l.qty * l.price, 0);
+    const balancePaid = a.status === 'completed' && got >= bill - 0.005;
+    const depositPaid = got > 0.004;
+    return balancePaid === a.balancePaid && depositPaid === a.depositPaid ? a : { ...a, balancePaid, depositPaid };
+  });
+}
+
 /** Tolerant: turns any stored/imported object into a usable Domain, dropping unreadable records. */
 export function repairDomain(raw: unknown): RepairReport {
   const report = { dropped: 0, problems: [] as string[] };
@@ -370,6 +385,7 @@ export function repairDomain(raw: unknown): RepairReport {
     onboardingComplete: bool(src.onboardingComplete, true),
     lastBackupAt: typeof src.lastBackupAt === 'string' ? src.lastBackupAt : null,
   };
+  domain.appointments = rebuildPaidFlags(domain.appointments, domain.payments);
   if (domain.staff.length === 0) {
     domain.staff = [{ id: 'st_you', name: 'You', role: 'Owner', color: '#7a2f57', initials: 'YOU' }];
   }
@@ -430,6 +446,9 @@ export function parseBackup(text: string): BackupParseResult {
   const clientIds = new Set(domain.clients.map((c) => c.id));
   const orphanAppts = domain.appointments.filter((a) => !clientIds.has(a.clientId)).length;
   const warnings: string[] = [];
+  const cardIds = new Set(domain.giftCards.map((g) => g.id));
+  const lostCards = domain.payments.filter((p) => !p.voided && p.method === 'Gift card' && (!p.giftCardId || !cardIds.has(p.giftCardId))).length;
+  if (lostCards > 0) warnings.push(`${lostCards} gift card payment${lostCards === 1 ? '' : 's'} refer to a gift card that isn't in this backup — the payments are kept, the card can't be used.`);
   if (orphanAppts > 0) warnings.push(`${orphanAppts} appointment${orphanAppts === 1 ? '' : 's'} belong to clients that were deleted before this backup was made — they'll show as "Deleted client".`);
 
   // A restored workspace should open straight into the app, not the welcome screen.

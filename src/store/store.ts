@@ -2,13 +2,13 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { makeId } from '../lib/id';
 import { todayISO, addDays, toISODate } from '../lib/dates';
-import { pointsForSpend, tierForPoints } from '../lib/loyalty';
+import { tierForPoints } from '../lib/loyalty';
 import { formatHoursLabel, nextOpenDay } from '../lib/hours';
 import { checkBooking } from '../lib/scheduling';
 import { canSaveDraft, evaluateDraft } from '../lib/booking';
 import { apptBill, apptPaid, apptPaymentCap, activeStaff, clientName, getNextApptForClient, inventoryUsage, lastCompletedAppt, rebookWeeksFor } from '../lib/selectors';
-import { OPEN_STATUSES, findDuplicatePayment, isUntouchedCard, isUsableCard, newCardCode, withPoints } from '../lib/finance';
-import { backupFileName, buildBackup, parseBackup, repairDomain } from '../lib/backup';
+import { OPEN_STATUSES, findDuplicatePayment, isUntouchedCard, isUsableCard, newCardCode, visitPoints, withPoints } from '../lib/finance';
+import { backupFileName, buildBackup, parseBackup, rebuildPaidFlags, repairDomain } from '../lib/backup';
 import { STORAGE_KEY, flushStorage, markHydrated, persistStorage, readRecoverySnapshot, saveRecoverySnapshot, useStorageStatus } from '../lib/storage';
 import {
   CURRENCIES,
@@ -30,7 +30,9 @@ import type { AppState, ConfirmChoice, Domain, ServiceDraftRow } from './types';
 import type { Client, ClientNote, ClientPhoto, Service, StaffMember, InventoryItem, Expense, Appointment, AppointmentStatus, Payment, ContentItem, ContentStage, DepositOutcome, GiftCard } from '../types';
 
 function buildDomain(): Domain {
-  const appointments = seedAppointments();
+  const seeded = seedAppointments();
+  const payments = seedPayments(seeded);
+  const appointments = rebuildPaidFlags(seeded, payments);
   return {
     business: defaultBusiness(),
     staff: seedStaff(),
@@ -38,7 +40,7 @@ function buildDomain(): Domain {
     clients: seedClients(),
     appointments,
     inventory: seedInventory(),
-    payments: seedPayments(appointments),
+    payments,
     expenses: seedExpenses(),
     waitlist: seedWaitlist(),
     content: seedContent(),
@@ -139,6 +141,15 @@ function restoreCards(cards: GiftCard[], voided: Payment[]): GiftCard[] {
   return cards.map((c) => (back.has(c.id) ? { ...c, balance: round2(Math.min(c.initialValue, c.balance + (back.get(c.id) || 0))) } : c));
 }
 
+/** Keeps a completed visit's loyalty points equal to what has actually been paid on it. */
+function syncVisitPoints(clients: Client[], appt: Appointment | undefined, before: Payment[], after: Payment[], reason: string): Client[] {
+  if (!appt || appt.status !== 'completed') return clients;
+  const bill = apptBill(appt);
+  const delta = visitPoints(bill, apptPaid({ payments: after }, appt.id)) - visitPoints(bill, apptPaid({ payments: before }, appt.id));
+  if (!delta) return clients;
+  return clients.map((c) => (c.id === appt.clientId ? withPoints(c, delta, reason, appt.id) : c));
+}
+
 /** Paid/settled flags always follow the payments that are still valid. */
 function syncApptFlags(appointments: Appointment[], payments: Payment[], apptIds: (string | null | undefined)[]): Appointment[] {
   const ids = new Set(apptIds.filter(Boolean) as string[]);
@@ -159,6 +170,7 @@ export interface Actions {
   setConfirmChoice: (v: string) => void;
   closeConfirm: () => void;
   runConfirm: () => void;
+  runConfirmAlt: () => void;
 
   setSection: (s: AppState['section']) => void;
   setMobile: (v: boolean) => void;
@@ -304,6 +316,10 @@ export const useStore = create<AppState & Actions>()(
         return saveRecoverySnapshot(pickDomain(get()), reason);
       };
 
+      /** Adds a third button (e.g. "View Existing") to the dialog just opened. */
+      const withAlt = (altLabel: string, onAlt: () => void) =>
+        set((s) => (s.confirmDialog ? { confirmDialog: { ...s.confirmDialog, altLabel, onAlt } } : {}));
+
       const applyDomain = (domain: Domain) =>
         set({ ...domain, ...initialUI(), showOnboarding: !domain.onboardingComplete, pricingServiceId: domain.services[0]?.id ?? '' });
 
@@ -322,6 +338,12 @@ export const useStore = create<AppState & Actions>()(
           set({ confirmDialog: { title, message, onConfirm: () => {}, onConfirmChoice: onConfirm, choices, choice: initial, confirmLabel: confirmLabel || 'Confirm', cancelLabel: 'Go Back', destructive } }),
         setConfirmChoice: (v) => set((s) => (s.confirmDialog ? { confirmDialog: { ...s.confirmDialog, choice: v } } : {})),
         closeConfirm: () => set({ confirmDialog: null }),
+        runConfirmAlt: () => {
+          const d = get().confirmDialog;
+          if (!d) return;
+          set({ confirmDialog: null });
+          d.onAlt?.();
+        },
         runConfirm: () => {
           const d = get().confirmDialog;
           if (!d) return; // already handled (double click)
@@ -521,11 +543,15 @@ export const useStore = create<AppState & Actions>()(
             if (dup) {
               get().askConfirm(
                 'This client may already exist',
-                `${dup.name}${dup.archived ? ' (archived)' : ''} has the same ${samePhone(dup.phone, d.phone) ? 'phone number' : email && dup.email.trim().toLowerCase() === email.toLowerCase() ? 'email' : 'name'}. Add a new client anyway?`,
+                `${dup.name}${dup.archived ? ' (archived)' : ''} has the same ${samePhone(dup.phone, d.phone) ? 'phone number' : email && dup.email.trim().toLowerCase() === email.toLowerCase() ? 'email' : 'name'}. Open their profile, or create a separate client anyway?`,
                 () => get().saveNewClient(true),
-                'Add Anyway',
+                'Create Anyway',
                 'Go Back',
               );
+              withAlt('View Existing', () => {
+                set({ showNewClient: false, newClientDraft: defaultNewClientDraft() });
+                get().openClient(dup.id);
+              });
               return;
             }
           }
@@ -584,6 +610,10 @@ export const useStore = create<AppState & Actions>()(
                 'Save Anyway',
                 'Cancel',
               );
+              withAlt('View Existing', () => {
+                onSaved();
+                get().openClient(dup.id);
+              });
               return;
             }
           }
@@ -705,6 +735,7 @@ export const useStore = create<AppState & Actions>()(
           }),
         saveNewAppt: () => {
           const s = get();
+          if (!s.showNewAppt) return; // already saved (double click)
           const d = s.newApptDraft;
           const ev = evaluateDraft(s);
           if (!canSaveDraft(ev, d.allowOutsideHours)) {
@@ -947,7 +978,7 @@ export const useStore = create<AppState & Actions>()(
             giftCards = [{ id: makeId('gc'), code: newCardCode(giftCards, 'CR'), initialValue: overpaid, balance: overpaid, purchasedBy: clientName(s, appt.clientId), issuedDate: todayISO(), kind: 'credit', clientId: appt.clientId, sourceApptId: appt.id }, ...giftCards];
           }
 
-          const earned = pointsForSpend(bill);
+          const earned = visitPoints(bill, apptPaid({ payments }, appt.id));
           const clients = s.clients.map((c) => {
             if (c.id !== appt.clientId) return c;
             const next = withPoints(c, earned, `Visit ${appt.date} · ${s.business.currencySymbol}${bill.toFixed(2)} spent`, appt.id);
@@ -1174,10 +1205,12 @@ export const useStore = create<AppState & Actions>()(
             if (!now || now.voided) return;
             set((x) => {
               const payments = x.payments.map((y) => (y.id === id ? { ...y, voided: true, voidedAt: todayISO() } : y));
+              const visit = now.apptId ? x.appointments.find((a) => a.id === now.apptId) : undefined;
               return {
                 payments,
                 giftCards: restoreCards(x.giftCards, [now]),
                 appointments: syncApptFlags(x.appointments, payments, [now.apptId]),
+                clients: syncVisitPoints(x.clients, visit, x.payments, payments, `Payment voided (visit ${visit?.date ?? ''})`.replace(' ()', '')),
               };
             });
             get().toast(fromCard ? 'Payment voided · balance returned to the card' : 'Payment voided');
@@ -1323,7 +1356,13 @@ export const useStore = create<AppState & Actions>()(
           const payment: Payment = { id: payId, clientId: d.clientId, apptId: appt ? appt.id : null, amount, method: d.method, type, date: todayISO(), createdAt, ...(note ? { note } : {}), ...(giftCardId ? { giftCardId } : {}) };
           set((x) => {
             const payments = [payment, ...x.payments];
-            return { payments, giftCards, appointments: syncApptFlags(x.appointments, payments, [payment.apptId]), showRecordPayment: false };
+            return {
+              payments,
+              giftCards,
+              appointments: syncApptFlags(x.appointments, payments, [payment.apptId]),
+              clients: syncVisitPoints(x.clients, appt, x.payments, payments, `Payment received (visit ${appt?.date ?? ''})`),
+              showRecordPayment: false,
+            };
           });
           if (soldCode) get().toast(`Gift card ${soldCode} sold · ${cur}${amount.toFixed(2)}`);
           else if (appt) {
@@ -1344,12 +1383,21 @@ export const useStore = create<AppState & Actions>()(
             get().toast(`${client.name.split(' ')[0]} needs ${reward.pointsCost - client.loyaltyPoints} more points`);
             return;
           }
-          set((st) => ({
-            clients: st.clients.map((c) =>
-              c.id === clientId ? { ...withPoints(c, -reward.pointsCost, `Redeemed: ${reward.label}`), notes: [{ id: makeId('note'), date: todayISO(), text: `Redeemed reward: ${reward.label} (−${reward.pointsCost} pts)`, author: 'Lumora' }, ...c.notes] } : c,
-            ),
-          }));
-          get().toast(`Redeemed: ${reward.label}`);
+          get().askConfirm(
+            `Redeem ${reward.label}?`,
+            `${reward.pointsCost} points will be taken from ${client.name.split(' ')[0]}'s ${client.loyaltyPoints}. This is recorded in their points history.`,
+            () => {
+              const now = get().clients.find((c) => c.id === clientId);
+              if (!now || now.loyaltyPoints < reward.pointsCost) return get().toast('Not enough points');
+              set((st) => ({
+                clients: st.clients.map((c) =>
+                  c.id === clientId ? { ...withPoints(c, -reward.pointsCost, `Redeemed: ${reward.label}`), notes: [{ id: makeId('note'), date: todayISO(), text: `Redeemed reward: ${reward.label} (−${reward.pointsCost} pts)`, author: 'Lumora' }, ...c.notes] } : c,
+                ),
+              }));
+              get().toast(`Redeemed: ${reward.label}`);
+            },
+            'Redeem',
+          );
         },
         addContentItem: (c) => {
           set((s) => ({ content: [{ ...c, id: makeId('ct'), stage: 'idea', date: null }, ...s.content] }));

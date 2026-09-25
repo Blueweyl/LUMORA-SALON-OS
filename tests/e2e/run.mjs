@@ -95,6 +95,20 @@ const noHScroll = async (page) => page.evaluate(() => document.documentElement.s
     await page.getByRole('combobox').fill('');
   });
 
+  await step('duplicate client (same phone, different format) offers View Existing | Create Anyway', async () => {
+    await page.getByRole('button', { name: 'Quick add' }).click();
+    await page.getByRole('menuitem', { name: 'New Client' }).click();
+    const dlg = page.getByRole('dialog');
+    await dlg.getByLabel('Full name').fill('Sarah M Duplicate');
+    await dlg.getByLabel('Phone').fill('+1 415.555.0142');
+    await dlg.getByRole('button', { name: 'Save Client' }).click();
+    await page.getByText('This client may already exist').waitFor();
+    assert(await page.getByRole('button', { name: 'Create Anyway' }).isVisible(), 'no Create Anyway');
+    await page.getByRole('button', { name: 'View Existing' }).click();
+    await page.getByRole('heading', { name: 'Sarah Mitchell' }).waitFor();
+    assert((await page.getByText('Sarah M Duplicate').count()) === 0, 'duplicate was created');
+  });
+
   await step('new client → booking blocks a double-booking and accepts a suggested time', async () => {
     await page.getByRole('button', { name: 'Quick add' }).click();
     await page.getByRole('menuitem', { name: 'New Client' }).click();
@@ -421,6 +435,34 @@ const noHScroll = async (page) => page.evaluate(() => document.documentElement.s
     await shot(page, 'mobile-deposit-choice');
     await page.getByRole('button', { name: 'Go Back' }).click();
     await page.keyboard.press('Escape');
+  });
+
+  await step('mobile: duplicate-client dialog and gift card checkout fit and work', async () => {
+    await page.getByRole('button', { name: 'Quick add' }).click();
+    await page.getByRole('menuitem', { name: 'New Client' }).click();
+    const dlg = page.getByRole('dialog');
+    await dlg.getByLabel('Full name').fill('Mobile Dup');
+    await dlg.getByLabel('Phone').fill('4155550142');
+    await dlg.getByRole('button', { name: 'Save Client' }).click();
+    await page.getByRole('button', { name: 'View Existing' }).waitFor();
+    const box = await page.getByRole('dialog').last().boundingBox();
+    assert(box && box.width <= 360, 'duplicate dialog too wide');
+    assert(await noHScroll(page), 'duplicate dialog overflows');
+    await page.getByRole('button', { name: 'View Existing' }).click();
+    await page.getByRole('heading', { name: 'Sarah Mitchell' }).waitFor();
+    const nav = page.getByRole('navigation', { name: 'Sections' });
+    await nav.getByRole('button', { name: 'Home' }).click();
+    await page.getByRole('button', { name: /Olivia Chen/ }).first().click();
+    const appt = page.getByRole('dialog');
+    await appt.getByRole('button', { name: 'Check In' }).click();
+    await appt.getByRole('button', { name: 'Start Service' }).click();
+    const gc = appt.getByLabel('Gift card / store credit');
+    await gc.selectOption({ index: 1 });
+    assert(await noHScroll(page), 'checkout overflows with gift card');
+    await shot(page, 'mobile-checkout-giftcard');
+    await appt.getByRole('button', { name: /Complete/ }).click();
+    await page.getByText(/paid from gift card/).waitFor();
+    await page.getByRole('button', { name: 'Not now' }).click();
   });
 
   await step('mobile: primary touch targets are at least 36px tall', async () => {

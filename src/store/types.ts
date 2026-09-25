@@ -94,6 +94,8 @@ export interface ConfirmDialogState {
   cancelLabel?: string;
   destructive?: boolean;
   choices?: ConfirmChoice[]; // optional radio choice passed to onConfirm
+  altLabel?: string; // optional third button (e.g. "View Existing")
+  onAlt?: () => void;
   choice?: string;
   onConfirmChoice?: (choice: string) => void;
 }
